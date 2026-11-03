@@ -12,10 +12,10 @@ AUTO_START = 1.0
 D_STOP, D_CLEAR, D_SLOW = 0.25, 0.35, 0.60
 SLOW_FRACTION = 0.25
 T_CLEAR, T_STATIC, T_MIN = 1.0, 5.0, 0.3
-N_OK = 3
+N_OK, N_CENTERED = 3, 2
 SEARCH_RATE = TURN_RATE = 1.0
-TURN_MIN, TURN_MAX = math.radians(100), math.radians(420)
-TURN_TOL_Y = 0.04
+TURN_WINDOW = math.radians(45)
+TURN_TOL = math.radians(10)
 
 IDLE, FOLLOW, WAIT, SEARCH, TURN = "IDLE", "FOLLOW", "WAIT", "SEARCH", "TURN"
 
@@ -90,16 +90,17 @@ class FSM:
         return 0.0, self.side * SEARCH_RATE
 
     def turn(self, image, cmd):
+        out = self.look(image)
         turned = abs(self.heading - self.heading0)
-        if turned >= TURN_MIN:
-            target = self.follower.find(image)
-            self.line = LOST if target is None else OK
-            if target is not None and abs(target[1]) <= TURN_TOL_Y:
-                self.follower.reset()
-                self.go(FOLLOW, f"turned {math.degrees(turned):.0f} deg, line ahead")
-                return 0.0, 0.0
-        if turned >= TURN_MAX:
-            self.go(IDLE, f"turned {math.degrees(TURN_MAX):.0f} deg without the line")
+        centred = out.status == OK and abs(math.atan2(out.target[1], out.target[0])) < TURN_TOL
+        if centred and turned >= math.pi - TURN_WINDOW:
+            self.n_ok += 1
+            if self.n_ok >= N_CENTERED:
+                self.go(FOLLOW, "turn done, line centred")
+            return 0.0, 0.0
+        self.n_ok = 0
+        if turned >= math.pi + TURN_WINDOW:
+            self.go(SEARCH, "turned past the window without the line")
             return 0.0, 0.0
         return 0.0, TURN_RATE
 
