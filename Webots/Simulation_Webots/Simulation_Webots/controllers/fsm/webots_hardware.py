@@ -1,15 +1,8 @@
 """Webots implementation of the hardware hooks (Cherokey_4W_v3 robot).
 
-Filled in: timing, camera (for the line follower), the 4 wheel motors and the
-keyboard (START/STOP for the tests).
-
-Still to fill in (sensors), marked TODO below:
-- obstacle_distance(): the URM37 rangefinder;
-- heading(): the PS1..PS4 wheel encoders;
-- set_rangefinder_angle(): the servo (only needed from v5).
-Until then obstacle_distance() and heading() return PLACEHOLDERS so the robot can
-already follow the line in Webots: no obstacle is ever seen, and the heading is
-the integral of the commanded turn rate (no sensor). A warning is printed once.
+All hooks filled in: timing, camera (for the line follower), the 4 wheel motors,
+the wheel encoders PS1..PS4 (heading), the URM37 rangefinder and its servo, and
+the keyboard (START/STOP for the tests).
 
 Keys (click the 3D view first): G = START, S or space = STOP, L = blind/unblind the
 camera (test "line disappears and comes back").
@@ -24,6 +17,11 @@ from hardware import K_WHEELS, Hardware
 WHEEL_R = 0.0325                     # m, wheel radius (Cherokey_4W_v3.proto)
 LEFT_MOTORS = ("Motor2", "Motor4")   # front left, rear left
 RIGHT_MOTORS = ("Motor1", "Motor3")  # front right, rear right
+LEFT_ENCODERS = ("PS2", "PS4")       # same wheels as LEFT_MOTORS
+RIGHT_ENCODERS = ("PS1", "PS3")      # same wheels as RIGHT_MOTORS
+US_VALUE = [500, 1250, 2500, 3750, 5000]   # URM37.proto lookupTable, value -> metres
+US_DIST = [0.20, 0.25, 0.50, 0.75, 1.00]   # below 500 everything is <= 0.20 m; 5000 = 1 m or more
+SERVO_LIMIT = 1.58                         # rad, servomoteur min/maxPosition
 
 
 class WebotsHardware(Hardware):
@@ -38,12 +36,18 @@ class WebotsHardware(Hardware):
             m.setPosition(float("inf"))      # velocity control
             m.setVelocity(0.0)
         self.phi_max = self.left[0].getMaxVelocity()
+        self.enc_left = [self.robot.getDevice(n) for n in LEFT_ENCODERS]
+        self.enc_right = [self.robot.getDevice(n) for n in RIGHT_ENCODERS]
+        for s in self.enc_left + self.enc_right:
+            s.enable(time_step_ms)
+        self._heading0 = None                # encoder heading at the first reading
+        self.us = self.robot.getDevice("URM37")
+        self.us.enable(time_step_ms)
+        self.servo = self.robot.getDevice("servomoteur")
+        self.set_rangefinder_angle(0.0)      # look straight ahead
         self.kb = self.robot.getKeyboard()
         self.kb.enable(time_step_ms)
         self.blind = False
-        self._w_cmd = 0.0                    # last commanded turn rate (placeholder heading)
-        self._heading = 0.0
-        self._warned = set()
 
     # ------------------------------------------------------------ timing
     def step(self):
@@ -87,24 +91,29 @@ class WebotsHardware(Hardware):
             m.setVelocity(float(np.clip(v_left / WHEEL_R, -lim, lim)))
         for m in self.right:
             m.setVelocity(float(np.clip(v_right / WHEEL_R, -lim, lim)))
-        self._w_cmd = (v_right - v_left) / (2 * K_WHEELS)
 
-    # ------------------------------------------------------------ sensors: TODO
-    def obstacle_distance(self):
-        """TODO(sensors): read the "URM37" DistanceSensor and return metres.
-        PLACEHOLDER until then: nothing ahead, so WAIT and TURN never trigger."""
-        self._warn("obstacle_distance", "rangefinder hook empty: obstacles are ignored")
-        return float("inf")
-
+    # ------------------------------------------------------------ encoders
     def heading(self):
-        """TODO(sensors): read the PS1..PS4 PositionSensors (rad) and return
-        WHEEL_R * (mean(right) - mean(left)) / (2 * K_WHEELS); right = PS1, PS3, left = PS2, PS4.
-        PLACEHOLDER until then: integral of the commanded turn rate (no sensor, no slip)."""
-        self._warn("heading", "encoder hook empty: heading = integral of the commanded turn rate")
-        self._heading += self._w_cmd * self.time_step_ms / 1000.0
-        return self._heading
+        """Turn since start from the wheel encoders, rad, + = left (counter-clockwise).
+        Wheel angle phi (rad) times WHEEL_R = distance rolled by that wheel; the
+        right side minus the left side, over the track 2 * K_WHEELS, is the turn."""
+        left = sum(s.getValue() for s in self.enc_left) / len(self.enc_left)
+        right = sum(s.getValue() for s in self.enc_right) / len(self.enc_right)
+        h = WHEEL_R * (right - left) / (2 * K_WHEELS)
+        if np.isnan(h):                      # no value before the first robot.step()
+            return 0.0
+        if self._heading0 is None:
+            self._heading0 = h
+        return float(h - self._heading0)
 
-    def _warn(self, hook, text):
-        if hook not in self._warned:
-            self._warned.add(hook)
-            print(f"[HW] TODO {hook}(): {text}")
+    # ------------------------------------------------------------ rangefinder
+    def obstacle_distance(self):
+        """URM37 raw value converted to metres with the proto lookupTable (inverse).
+        Raw value, not filtered: the FSM takes the median of the last 3 readings."""
+        raw = self.us.getValue()
+        if np.isnan(raw):                    # NaN before the first measurement
+            return float("inf")
+        return float(np.interp(raw, US_VALUE, US_DIST))
+
+    def set_rangefinder_angle(self, angle):
+        self.servo.setPosition(float(np.clip(angle, -SERVO_LIMIT, SERVO_LIMIT)))
