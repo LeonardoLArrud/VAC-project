@@ -18,6 +18,14 @@
   clearly more or less than half a turn, calibrate `K_WHEELS` (`hardware.py`) and `K` (`line_follower.py`).
 - Every transition is printed: `[FSM] t=  8.64s FOLLOW -> WAIT (obstacle at 0.25 m)`.
 
+## Reflection filter and live view
+
+- `line_follower.py` filters the image before looking for the line (blur, `THRESHOLD`, opening
+  `OPEN_W` x `OPEN_H`), as on the real robot, so small floor reflections are not taken as the line.
+  `FILTER = False` turns it off. numpy only, no OpenCV.
+- While the simulation runs: `http://localhost:8000/` (camera, bands, line points: green = target,
+  magenta = out of range) and `http://localhost:8000/mask` (what the follower sees). `LIVE_VIEW` in `fsm.py`.
+
 ## Real robot
 
 Write `RobotHardware(Hardware)` (Pi camera, ultrasound, encoders, UART to the Arduino) and use it in `fsm.py`.

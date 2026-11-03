@@ -18,6 +18,7 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
+from numpy.lib.stride_tricks import sliding_window_view
 
 H_CAM = 0.132                 # m, camera height
 X_CAM = 0.104                 # m, camera ahead of the chassis centre
@@ -31,6 +32,13 @@ A_UP = 0.5                    # m/s^2, acceleration limit
 A_DOWN = 1.5                  # m/s^2, deceleration limit
 THRESHOLD = 150               # grey level: brighter = line
 WIDTH = 480                   # px, processing width
+# Image filter against floor reflections (same as Robo_FSM/pi/line_follower.py, numpy only, no OpenCV):
+# blur, threshold, then an opening that removes white blobs narrower than OPEN_W or shorter than OPEN_H.
+# Sizes in px of the 480x270 image: the huit.jpg line (~12 mm) is 16 px wide on the far band and
+# 23 px on the near one; a crossing line on the far band is ~7 px tall. Odd sizes only.
+FILTER = True
+BLUR = 3
+OPEN_W, OPEN_H = 9, 3
 
 OK, MEMORY, LOST = "OK", "MEMORY", "LOST"
 
@@ -66,14 +74,24 @@ class LineFollower:
         self.L_lost = BANDS[-1]
         self.travelled = 0.0
         self.side = 1.0
+        self.points = []  # (row, u, used) of the last image, in follower pixels: for the live view
 
     def _grey(self, img):
         p = self.px_step
         return img[::p, ::p, :3].mean(axis=2)[: self.nv, : self.nu]
 
+    def mask(self, img):
+        """1 where the follower sees the line (nv x nu, uint8): blur, threshold, then an opening."""
+        g = self._grey(img).astype(np.uint8)
+        if not FILTER:
+            return (g > THRESHOLD).astype(np.uint8)
+        m = (_blur(g, BLUR) > THRESHOLD).astype(np.uint8)
+        return _morph(_morph(m, OPEN_H, OPEN_W, np.min, 1), OPEN_H, OPEN_W, np.max, 0)
+
     @staticmethod
-    def _find_line(g, row, u_ref):
-        white = (g[row - 2 : row + 3].mean(axis=0) > THRESHOLD).astype(np.int8)
+    def _find_line(m, row, u_ref):
+        """m: mask from mask(). Centre of the white run on this row closest to u_ref, or None."""
+        white = (m[row - 2 : row + 3].mean(axis=0) > 0.5).astype(np.int8)
         edge = np.diff(np.concatenate(([0], white, [0])))
         start, end = np.flatnonzero(edge == 1), np.flatnonzero(edge == -1)
         ok = end - start >= 2
@@ -84,8 +102,8 @@ class LineFollower:
 
     def step(self, img, v_max, v_prev, w_prev):
         """img: (height, width, 4) BGRA array. v_max: ceiling from the FSM, m/s."""
-        g = self._grey(img)
-        target = None
+        g = self.mask(img)
+        target, points = None, []
         for j in reversed(range(len(self.bands))):
             dj, row, mj, wj = self.bands[j]
             u = self._find_line(g, row, self.u_prev[j])
@@ -93,9 +111,12 @@ class LineFollower:
                 continue
             self.u_prev[j] = u
             y = -mj * (u - self.cu)
-            if abs(y) <= 0.7 * wj:
+            used = abs(y) <= 0.7 * wj
+            points.append((row, u, used))
+            if used:
                 target = (dj, y)
                 break
+        self.points = points
 
         status = OK
         if target is not None:
@@ -128,3 +149,15 @@ class LineFollower:
         v = min(max(v_target, v_prev - A_DOWN * self.dt), v_prev + A_UP * self.dt)
         v = max(v, 0.0)
         return FollowerOutput(status, target, v, v * c, self.side)
+
+
+def _blur(g, k):
+    """Box blur k x k (as cv2.blur: borders reflected)."""
+    p = np.pad(g.astype(np.float32), k // 2, mode="reflect")
+    return sliding_window_view(sliding_window_view(p, k, axis=1).mean(axis=-1), k, axis=0).mean(axis=-1)
+
+
+def _morph(m, kh, kw, fn, pad):
+    """Erosion (fn=np.min, pad=1) or dilation (fn=np.max, pad=0) with a kh x kw rectangle."""
+    p = np.pad(m, ((kh // 2, kh // 2), (kw // 2, kw // 2)), constant_values=pad)
+    return fn(sliding_window_view(fn(sliding_window_view(p, kw, axis=1), axis=-1), kh, axis=0), axis=-1)
