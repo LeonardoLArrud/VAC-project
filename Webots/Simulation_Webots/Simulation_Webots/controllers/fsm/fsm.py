@@ -1,8 +1,8 @@
 """Main loop of the basic FSM (v1). Same loop in Webots, on the real robot and offline.
 
 Run in Webots: set the robot's controller to "fsm" (or, in the VM, ./run_extern.sh fsm).
-It uses webots_hardware.py: camera and motors are filled in; the rangefinder and the
-encoders are still TODO hooks with placeholders (see that file).
+It uses webots_hardware.py, where every hook is filled in (camera, motors, encoders,
+rangefinder, servo, keyboard).
 The offline test (offline/scenarios.py) calls main() with simulated hooks.
 
 Writes fsm_log.csv in this folder, one row per cycle, for the timeline
