@@ -21,7 +21,7 @@ const float U0 = 45.0;
 const float KFF = 15.0;
 const float KP = 8.0;
 const float KI = 60.0;
-const int ENC_SIGN[4] = {1, 1, 1, 1};
+const int ENC_SIGN[4] = {-1, 1, -1, 1};
 
 Motor motor[4] = {Motor(vitMotor1, dirMotor1, 0), Motor(vitMotor2, dirMotor2, 0),
                   Motor(vitMotor3, dirMotor3, 0), Motor(vitMotor4, dirMotor4, 0)};

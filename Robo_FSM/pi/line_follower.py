@@ -17,6 +17,7 @@ A_LAT = 1.0
 A_UP = 0.5
 A_DOWN = 1.5
 THRESHOLD = 150
+LINE_MAX_WIDTH = 0.06
 WIDTH = 480
 
 OK, MEMORY, LOST = "OK", "MEMORY", "LOST"
@@ -59,15 +60,27 @@ class LineFollower:
         return img[::p, ::p, :3].mean(axis=2)[: self.nv, : self.nu]
 
     @staticmethod
-    def _find_line(g, row, u_ref):
+    def _find_line(g, row, u_ref, mj):
         white = (g[row - 2 : row + 3].mean(axis=0) > THRESHOLD).astype(np.int8)
         edge = np.diff(np.concatenate(([0], white, [0])))
         start, end = np.flatnonzero(edge == 1), np.flatnonzero(edge == -1)
-        ok = end - start >= 2
+        ok = (end - start >= 2) & ((end - start) * mj <= LINE_MAX_WIDTH)
         if not ok.any():
             return None
         centres = (start[ok] + end[ok] - 1) / 2
         return float(centres[np.argmin(np.abs(centres - u_ref))])
+
+    def find(self, img):
+        g = self._grey(img)
+        for dj, row, mj, wj in reversed(self.bands):
+            u = self._find_line(g, row, self.cu, mj)
+            if u is not None and abs(-mj * (u - self.cu)) <= 0.7 * wj:
+                return dj, -mj * (u - self.cu)
+        return None
+
+    def reset(self):
+        self.u_prev = [self.cu] * len(self.bands)
+        self.memory, self.travelled = None, 0.0
 
     def _propagate(self, v, w):
         dt = self.dt
@@ -84,7 +97,7 @@ class LineFollower:
         target = None
         for j in reversed(range(len(self.bands))):
             dj, row, mj, wj = self.bands[j]
-            u = self._find_line(g, row, self.u_prev[j])
+            u = self._find_line(g, row, self.u_prev[j], mj)
             if u is None:
                 continue
             self.u_prev[j] = u
