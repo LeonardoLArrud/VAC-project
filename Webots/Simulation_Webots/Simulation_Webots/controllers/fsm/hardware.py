@@ -9,8 +9,7 @@ marked HOOK (Webots: Robot.getDevice(...); real robot: Pi camera, UART to the
 Arduino, ...). Until a hook is filled in, calling it raises NotImplementedError
 with its name, so nothing runs silently with a missing sensor.
 
-    class WebotsHardware(Hardware): ...   # webots_hardware.py: camera, motors, keyboard done;
-                                          # rangefinder and encoders still TODO
+    class WebotsHardware(Hardware): ...   # webots_hardware.py: all hooks done
     class RobotHardware(Hardware): ...    # real robot: all hooks to fill in
 
 Units and conventions (the FSM relies on them):

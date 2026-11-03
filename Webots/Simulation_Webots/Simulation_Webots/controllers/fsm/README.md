@@ -5,7 +5,7 @@
 | `fsm_basic.py` | The FSM (IDLE, FOLLOW, WAIT, SEARCH, TURN). Touches no device |
 | `line_follower.py` | The follower from `pure_pursuit.py`, packaged (same law; with no target it returns LOST and v = w = 0) |
 | `hardware.py` | The hooks: camera, rangefinder, encoders, commands, wheels, servo |
-| `webots_hardware.py` | Webots hooks. **Done:** camera, 4 motors, keyboard. **TODO (sensors):** `obstacle_distance()` (URM37), `heading()` (PS1 to PS4), `set_rangefinder_angle()` (servo) |
+| `webots_hardware.py` | Webots hooks. **All done:** camera, 4 motors, encoders PS1 to PS4 (`heading()`), `obstacle_distance()` (URM37), `set_rangefinder_angle()` (servo), keyboard |
 | `fsm.py` | Main loop: `hw.read()` -> `fsm.step()` -> `hw.wheels()`, writes `fsm_log.csv` |
 | `offline/` | Simulated hooks (`sim_hardware.py`), 11 scenarios (`scenarios.py`), timeline plot (`timeline.py`) |
 
@@ -14,9 +14,8 @@
 - Set the robot's `controller` to `fsm` (or, in the VM: `./run_extern.sh fsm` with `huit_extern.wbt`).
 - Starts by itself 1 s after launch (`AUTO_START` in `fsm.py`). Keys, with the 3D view clicked:
   `G` start, `S` or space stop, `L` blind/unblind the camera.
-- Until the sensor hooks are filled in, two placeholders run, each announced once in the console:
-  `obstacle_distance()` returns "nothing ahead" (**obstacles are ignored: the robot drives into them**) and
-  `heading()` integrates the commanded turn rate (SEARCH works, without slip).
+- `heading()` comes from the wheel encoders (no gyro). If a 180 deg U-turn in place comes out
+  clearly more or less than half a turn, calibrate `K_WHEELS` (`hardware.py`) and `K` (`line_follower.py`).
 - Every transition is printed: `[FSM] t=  8.64s FOLLOW -> WAIT (obstacle at 0.25 m)`.
 
 ## Real robot
