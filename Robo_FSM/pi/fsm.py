@@ -117,8 +117,11 @@ def main(hw):
             t, cmd = hw.time(), hw.command()
             if AUTO_START is not None and not fsm.history and t >= AUTO_START:
                 cmd = cmd or "START"
+            fsm.follower.points = []
             v, w = fsm.step(t, hw.camera_image(), hw.obstacle_distance(), hw.heading(), cmd)
             hw.set_wheels(v - K * w, v + K * w)
+            if hasattr(hw, "show"):
+                hw.show(fsm.follower.points)
             log.writerow([f"{t:.3f}", fsm.state, f"{v:.4f}", f"{w:.4f}", f"{fsm.d:.3f}", fsm.line])
     return fsm
 

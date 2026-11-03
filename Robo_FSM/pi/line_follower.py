@@ -53,6 +53,7 @@ class LineFollower:
         self.L_lost = BANDS[-1]
         self.travelled = 0.0
         self.side = 1.0
+        self.points = []  # (row, u, used) of the last image, in follower pixels: for the live view
 
     def _grey(self, img):
         p = self.px_step
@@ -72,14 +73,19 @@ class LineFollower:
     def find_target(self, img):
         """Farthest band first, searched from the image centre, without touching u_prev. (L, y) or None."""
         g = self._grey(img)
+        points, target = [], None
         for dj, row, mj, wj in reversed(self.bands):
             u = self._find_line(g, row, self.cu)
             if u is None:
                 continue
             y = -mj * (u - self.cu)
-            if abs(y) <= 0.7 * wj:
-                return dj, y
-        return None
+            used = abs(y) <= 0.7 * wj
+            points.append((row, u, used))
+            if used:
+                target = (dj, y)
+                break
+        self.points = points
+        return target
 
     def reset(self):
         """Forget the line position and the memory (after a U-turn the old ones are wrong)."""
@@ -98,7 +104,7 @@ class LineFollower:
 
     def step(self, img, v_max, v_prev, w_prev):
         g = self._grey(img)
-        target = None
+        target, points = None, []
         for j in reversed(range(len(self.bands))):
             dj, row, mj, wj = self.bands[j]
             u = self._find_line(g, row, self.u_prev[j])
@@ -106,9 +112,12 @@ class LineFollower:
                 continue
             self.u_prev[j] = u
             y = -mj * (u - self.cu)
-            if abs(y) <= 0.7 * wj:
+            used = abs(y) <= 0.7 * wj
+            points.append((row, u, used))
+            if used:
                 target = (dj, y)
                 break
+        self.points = points
 
         status = OK
         if target is not None:
