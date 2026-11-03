@@ -37,6 +37,7 @@ class RobotHardware:
                 self.stream = CameraStream(CAM_WIDTH, CAM_HEIGHT, CAM_FOV)
             except Exception as e:  # noqa: BLE001
                 print(f"live view off: {e}")
+        self.frame = None
         self.w_cmd = 0.0
         self.turned = 0.0
         self.t0 = self.next = time.monotonic()
@@ -97,14 +98,18 @@ class RobotHardware:
         return CAM_WIDTH, CAM_HEIGHT, CAM_FOV
 
     def camera_image(self):
-        img = self.cam.capture_array()
-        if self.stream is not None:
-            try:
-                self.stream.update(img)
-            except Exception as e:  # noqa: BLE001
-                print(f"live view off: {e}")
-                self.stream = None
-        return img
+        self.frame = self.cam.capture_array()
+        return self.frame
+
+    def show(self, points):
+        """Send the last image and the line points the follower found on it to the live view."""
+        if self.stream is None or self.frame is None:
+            return
+        try:
+            self.stream.update(self.frame, points)
+        except Exception as e:  # noqa: BLE001
+            print(f"live view off: {e}")
+            self.stream = None
 
     def obstacle_distance(self):
         return self.dist
