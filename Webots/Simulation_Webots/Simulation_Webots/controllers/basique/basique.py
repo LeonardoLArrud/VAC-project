@@ -16,7 +16,7 @@ TILT = math.radians(30)
 D = [0.20, 0.26, 0.31, 0.36]
 K = 0.135
 R_RODA = 0.0325
-V0 = 0.13
+V0 = 0.40
 TAU_EF = 0.10
 A_LAT = 1.0
 A_MAIS = 0.5
@@ -55,7 +55,9 @@ def verificar_objeto():
             return False
         if ler_ultrassom() > THRESHOLD:
             return False          # saiu da frente: não era estático
-    girar_angulo(180)
+    girar_ate_linha()                 # gira até a câmera ver a linha de novo (em vez de girar por tempo)
+    historico.clear()                 # leituras antigas (do obstáculo) não valem mais
+    u_prev[:] = [CU] * len(faixas)    # esquece a posição da linha de antes da virada
     return True              
 
 
@@ -118,6 +120,42 @@ def girar_angulo(graus, vel_ang=W_BUSCA):
         girado += abs(vel_ang) * dt
     parar_motores()
 
+def procurar_alvo(g):
+    """Mesma busca do loop principal, mas sem alterar u_prev. Devolve (dj, y) ou None."""
+    for j in reversed(range(len(faixas))):
+        dj, lin, mj, wj = faixas[j]
+        u = achar_linha(g, lin, CU)
+        if u is None:
+            continue
+        y = -mj * (u - CU)
+        if abs(y) <= 0.7 * wj:
+            return (dj, y)
+    return None
+
+
+def girar_ate_linha(graus_min=100, graus_max=420, vel_ang=1.0, tol_y=0.04):
+    """Vira no eixo (para a esquerda) até a câmera ver a linha de novo, centrada à frente.
+    Gira pelo menos graus_min, para não parar na própria linha de onde saiu, e no máximo
+    graus_max (maior que 360 de propósito: as rodas derrapam e giram menos que o calculado).
+    Devolve True se reencontrou a linha."""
+    minimo = math.radians(graus_min)
+    maximo = math.radians(graus_max)
+    girado = 0.0
+    achou = False
+    while girado < maximo:
+        girar_no_eixo(abs(vel_ang))
+        if robot.step(TIME_STEP) == -1:
+            break
+        girado += abs(vel_ang) * dt
+        if girado >= minimo:
+            alvo = procurar_alvo(cinza())
+            if alvo is not None and abs(alvo[1]) <= tol_y:
+                achou = True
+                break
+    parar_motores()
+    return achou
+
+
 v = 0.0
 w = 0.0
 memoria = None
@@ -130,7 +168,11 @@ while robot.step(TIME_STEP) != -1:
     alvo = None
     d = ler_ultrassom()
     if d <= THRESHOLD:
-        if verificar_objeto():
+        virou = verificar_objeto()
+        v = w = 0.0                   # o robô ficou parado, então o estado interno também zera
+        if virou:
+            memoria = None
+            andado = 0.0              # (antes estava 'andando', variável que não existe)
             continue
     for j in reversed(range(len(faixas))):
         dj, lin, mj, wj = faixas[j]
