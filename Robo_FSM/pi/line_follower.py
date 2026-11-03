@@ -69,6 +69,23 @@ class LineFollower:
         centres = (start[ok] + end[ok] - 1) / 2
         return float(centres[np.argmin(np.abs(centres - u_ref))])
 
+    def find_target(self, img):
+        """Farthest band first, searched from the image centre, without touching u_prev. (L, y) or None."""
+        g = self._grey(img)
+        for dj, row, mj, wj in reversed(self.bands):
+            u = self._find_line(g, row, self.cu)
+            if u is None:
+                continue
+            y = -mj * (u - self.cu)
+            if abs(y) <= 0.7 * wj:
+                return dj, y
+        return None
+
+    def reset(self):
+        """Forget the line position and the memory (after a U-turn the old ones are wrong)."""
+        self.u_prev = [self.cu] * len(self.bands)
+        self.memory, self.travelled = None, 0.0
+
     def _propagate(self, v, w):
         dt = self.dt
         dpsi = w * dt
