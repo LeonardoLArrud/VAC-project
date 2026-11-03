@@ -10,8 +10,13 @@ from line_follower import K
 PORT = "/dev/ttyACM0"
 CAM_WIDTH, CAM_HEIGHT = 640, 480
 CAM_FOV = math.radians(62.2)
+CAM_ROTATED_180 = True
 PWM_MIN = 45
-V_MAX = 0.45
+V_MAX = 0.60
+USE_ENCODERS = True
+WHEEL_R = 0.0325
+COUNTS_PER_REV = 11 * 21.3
+LIVE_VIEW = True
 
 
 class RobotHardware:
@@ -22,7 +27,16 @@ class RobotHardware:
         self.ser.reset_input_buffer()
         self.buf = b""
         self.dist = float("inf")
+        self.counts = self.counts0 = None
         self.cam = self._open_camera()
+        self.stream = None
+        if LIVE_VIEW:
+            try:
+                from camera_stream import CameraStream
+
+                self.stream = CameraStream(CAM_WIDTH, CAM_HEIGHT, CAM_FOV)
+            except Exception as e:  # noqa: BLE001
+                print(f"live view off: {e}")
         self.w_cmd = 0.0
         self.turned = 0.0
         self.t0 = self.next = time.monotonic()
@@ -30,14 +44,17 @@ class RobotHardware:
 
     @staticmethod
     def _open_camera():
+        from libcamera import Transform
         from picamera2 import Picamera2
 
         cam = Picamera2()
         main = {"size": (CAM_WIDTH, CAM_HEIGHT), "format": "RGB888"}
+        flip = Transform(hflip=CAM_ROTATED_180, vflip=CAM_ROTATED_180)
+        opts = {"buffer_count": 3, "queue": False, "transform": flip}
         try:
-            cfg = cam.create_preview_configuration(main=main, raw={"size": (1640, 1232)})
+            cfg = cam.create_preview_configuration(main=main, raw={"size": (1640, 1232)}, **opts)
         except Exception:  # noqa: BLE001
-            cfg = cam.create_preview_configuration(main=main)
+            cfg = cam.create_preview_configuration(main=main, **opts)
         cam.configure(cfg)
         cam.start()
         time.sleep(1.0)
@@ -64,10 +81,14 @@ class RobotHardware:
             line = line.decode(errors="ignore").strip()
             if line.startswith("D,"):
                 try:
-                    cm = int(line[2:])
+                    values = [int(x) for x in line[2:].split(",")]
                 except ValueError:
                     continue
+                cm = values[0]
                 self.dist = cm / 100.0 if cm >= 0 else (float("inf") if cm == -1 else 0.0)
+                if len(values) == 5:
+                    self.counts = values[1:]
+                    self.counts0 = self.counts0 or self.counts
 
     def time(self):
         return time.monotonic() - self.t0
@@ -76,13 +97,23 @@ class RobotHardware:
         return CAM_WIDTH, CAM_HEIGHT, CAM_FOV
 
     def camera_image(self):
-        return self.cam.capture_array()
+        img = self.cam.capture_array()
+        if self.stream is not None:
+            try:
+                self.stream.update(img)
+            except Exception as e:  # noqa: BLE001
+                print(f"live view off: {e}")
+                self.stream = None
+        return img
 
     def obstacle_distance(self):
         return self.dist
 
     def heading(self):
-        return self.turned
+        if not USE_ENCODERS or self.counts is None:
+            return self.turned
+        phi = [2 * math.pi * (n - n0) / COUNTS_PER_REV for n, n0 in zip(self.counts, self.counts0)]
+        return WHEEL_R * ((phi[0] + phi[2]) / 2 - (phi[1] + phi[3]) / 2) / (2 * K)
 
     def command(self):
         return None
@@ -97,7 +128,10 @@ class RobotHardware:
         return int(math.copysign(PWM_MIN + (255 - PWM_MIN) * min(abs(v) / V_MAX, 1.0), v))
 
     def set_wheels(self, v_left, v_right):
-        self.ser.write(f"M{self._pwm(v_left)},{self._pwm(v_right)}\n".encode())
+        if USE_ENCODERS:
+            self.ser.write(f"S{round(1000 * v_left)},{round(1000 * v_right)}\n".encode())
+        else:
+            self.ser.write(f"M{self._pwm(v_left)},{self._pwm(v_right)}\n".encode())
         self.w_cmd = (v_right - v_left) / (2 * K)
 
     def stop(self):
