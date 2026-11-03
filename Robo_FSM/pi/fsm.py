@@ -11,10 +11,10 @@ AUTO_START = 1.0
 
 D_STOP, D_CLEAR, D_SLOW = 0.25, 0.35, 0.60
 SLOW_FRACTION = 0.25
-T_CLEAR, T_STATIC, T_MIN = 1.0, 5.0, 0.3
+T_CLEAR, T_STATIC, T_MIN = 1.0, 3.0, 0.3
 N_OK = 3
 SEARCH_RATE = TURN_RATE = 1.0
-TURN_MIN, TURN_MAX = math.radians(100), math.radians(420)
+TURN_MIN, TURN_MAX = math.radians(135), math.radians(420)
 TURN_TOL_Y = 0.04
 
 IDLE, FOLLOW, WAIT, SEARCH, TURN = "IDLE", "FOLLOW", "WAIT", "SEARCH", "TURN"
@@ -95,9 +95,12 @@ class FSM:
             target = self.follower.find(image)
             self.line = LOST if target is None else OK
             if target is not None and abs(target[1]) <= TURN_TOL_Y:
-                self.follower.reset()
-                self.go(FOLLOW, f"turned {math.degrees(turned):.0f} deg, line ahead")
+                self.n_ok += 1
+                if self.n_ok >= N_OK:
+                    self.follower.reset()
+                    self.go(FOLLOW, f"turned {math.degrees(turned):.0f} deg, line ahead")
                 return 0.0, 0.0
+            self.n_ok = 0
         if turned >= TURN_MAX:
             self.go(IDLE, f"turned {math.degrees(TURN_MAX):.0f} deg without the line")
             return 0.0, 0.0
