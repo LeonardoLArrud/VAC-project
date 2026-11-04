@@ -1,8 +1,9 @@
 """Checks on the real robot (Arduino with robo_fsm.ino).
-python3 diag.py [all] | camera | live | wheels | encoders | pi | speed | turn | odometry | nodecam | nodestop | nodegap | nodewhy | gridrecord [seconds]
+python3 diag.py [all] | camera | live | wheels | encoders | pi | speed | turn | odometry | camcal | nodecam | nodestop | nodegap | nodewhy | gridrecord [seconds]
 Distance to a node = odometry s + camera d. Calibrate them in this order:
   odometry  follows a straight line for 1 m by the encoders, you measure it: WHEEL_R
-  nodecam   robot still, a crossing at a distance you measure: TILT_deg
+  camcal    robot still, a crossing at 3 distances you measure: H_CAM, TILT_deg, X_CAM (tape edges + widths in the image)
+  nodecam   robot still, a crossing at a distance you measure: what the node detector reads (TILT_deg only)
   nodestop  the whole chain: follows the line and stops on a node centre (as before a turn), you measure the error
   nodegap   follows a grid line through several nodes: the spacing between nodes (last number of MISSION)
 nodewhy: robot still before a node: what the bars and corners detectors see, and why they give no node
@@ -23,7 +24,7 @@ import numpy as np
 import serial
 
 from fsm import D_STOP, FSM, IDLE, NODES, TIME_STEP, look_for_node
-from line_follower import H_CAM, K, LOST, THRESHOLD, TILT, X_CAM, LineFollower
+from line_follower import BANDS, H_CAM, K, LOST, THRESHOLD, TILT, X_CAM, LineFollower
 from navigators import SIDE, Navigator, OrderList
 from node_detector import ZONE, NodeDetector
 from params import PATH as PARAMS_PATH
@@ -272,6 +273,220 @@ def floor_start():
     """Distance (m, from the robot centre) of the floor seen at the bottom of the image."""
     f = (CAM_WIDTH / 2) / math.tan(CAM_FOV / 2)
     return X_CAM + H_CAM / math.tan(math.atan(((CAM_HEIGHT - 1) / 2) / f) + TILT)
+
+
+# Camera geometry from a crossing at distances measured with a tape (camcal): fits H_CAM, TILT, X_CAM.
+#
+# The robot stands still on a straight line facing a crossing (+, T or L); d = robot centre (midway between the
+# axles) to the middle of the crossing tape. In the image, with no detector in between:
+# - the rows of the near and far edges of the crossing tape: the floor at d - CAL_TAPE/2 and d + CAL_TAPE/2
+# - the width in pixels of the line, row by row below the crossing: CAL_TAPE / (m per pixel of that row)
+# The camera model (line_follower.py) gives both: row = cv + f tan(atan2(H_CAM, x - X_CAM) - TILT), and
+# m per pixel = H_CAM / (f (sin TILT + q cos TILT)), q = (row - cv) / f. f comes from CAM_FOV_deg (the lens).
+# Least squares over 2-4 distances: the rows fix TILT and X_CAM, the widths fix H_CAM.
+CAL_TAPE = 0.025          # m, tape width
+
+
+def cal_row_of(x, h, tilt, xc, f, cv):
+    """Image row where the floor x m ahead of the robot centre is seen."""
+    return cv + f * np.tan(np.arctan2(h, np.asarray(x) - xc) - tilt)
+
+
+def cal_ahead_of(v, h, tilt, xc, f, cv):
+    """m ahead of the robot centre of the floor seen on image row v."""
+    return xc + h / np.tan(np.arctan((np.asarray(v) - cv) / f) + tilt)
+
+
+def cal_width_px(v, h, tilt, f, cv):
+    """Width in pixels of the tape (CAL_TAPE) across the robot axis, on image row v."""
+    q = (np.asarray(v) - cv) / f
+    return CAL_TAPE * f * (math.sin(tilt) + q * math.cos(tilt)) / h
+
+
+def cal_runs(a):
+    e = np.diff(np.r_[0, a.astype(np.int8), 0])
+    return np.flatnonzero(e == 1), np.flatnonzero(e == -1)
+
+
+def cal_measure(grey, f):
+    """Tape edges and line widths in one grey image (follower pixels). Returns dict(edges: [(px right of the image
+    centre, near edge row, far edge row)] per side the crossing tape goes, rows, widths: of the line, across: px of
+    the line centre right of the image centre) or raises ValueError saying what is wrong with the scene."""
+    g = cv2.GaussianBlur(grey, (5, 5), 0)
+    t = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[0]
+    white = g > t
+    nv, nu = white.shape
+    rows, centres, widths, u_ref = [], [], [], nu / 2
+    bar = None
+    for v in range(nv - 1, -1, -1):                 # the line, from the bottom of the image up to the crossing
+        s, e = cal_runs(white[v])
+        if not len(s):
+            if rows:
+                raise ValueError(f"the line stops at row {v} before any crossing: is a crossing ahead?")
+            continue
+        k = int(np.argmin(np.abs((s + e - 1) / 2 - u_ref)))
+        w = e[k] - s[k]
+        if len(widths) >= 10 and w > 2.5 * np.median(widths[-10:]):
+            bar = v                                 # the line widens: the crossing tape
+            break
+        rows.append(v)
+        centres.append((s[k] + e[k] - 1) / 2)
+        widths.append(w)
+        u_ref = centres[-1]
+    if len(rows) < 20:
+        raise ValueError(f"only {len(rows)} rows of line under the crossing: robot too close, or no line")
+    if bar is None:
+        raise ValueError("no crossing tape seen above the line: too far, or out of the image")
+    w_line = float(np.median(widths[-20:]))
+    edges = []                                      # per side the crossing tape goes: (column, near row, far row)
+    for sign in (1, -1):                            # columns 2-4 line widths beside the line
+        side = []
+        for c in np.arange(centres[-1] + sign * 2 * w_line, centres[-1] + sign * 4 * w_line, sign * 2):
+            c = int(round(c))
+            if not 0 <= c < nu:
+                continue
+            s, e = cal_runs(white[:, c])
+            if not len(s):
+                continue
+            k = int(np.argmin(np.abs(e - 1 - bar)))
+            if abs(e[k] - 1 - bar) <= 15 and e[k] < nv and s[k] > 0:   # a band ending near the crossing row
+                side.append((c - (nu - 1) / 2, e[k] - 0.5, s[k] - 0.5))   # edges between tape and floor rows
+        if len(side) >= 3:
+            edges.append(tuple(np.median(np.array(side), axis=0)))
+    if not edges:
+        raise ValueError("the crossing tape is not seen beside the line (it must go at least 4 cm to one side)")
+    return dict(edges=edges, rows=np.array(rows[5:-5], float), widths=np.array(widths[5:-5], float),
+                across=np.array(centres[5:-5]) - (nu - 1) / 2)
+
+
+def cal_angle_deg(m, h, tilt, xc, f, cv):
+    """Angle (deg, + = line turning left) between the robot axis and the line, from the line on the floor. In the
+    image a turned robot sees the line shifted rather than slanted (perspective): it must be measured in metres."""
+    x = cal_ahead_of(m["rows"], h, tilt, xc, f, cv)
+    y = -m["across"] * CAL_TAPE / cal_width_px(m["rows"], h, tilt, f, cv)
+    return math.degrees(math.atan(np.polyfit(x, y, 1)[0]))
+
+
+def cal_along(v, col, a, h, tilt, xc, f, cv):
+    """(m along the line, m per row) of the floor seen at image row v, col px right of the image centre."""
+    x = cal_ahead_of([v - 0.5, v, v + 0.5], h, tilt, xc, f, cv)
+    y = -col * CAL_TAPE / cal_width_px(v, h, tilt, f, cv)
+    return x[1] * math.cos(a) + y * math.sin(a), abs(x[0] - x[2])
+
+
+def cal_crossing_at(m, h, tilt, xc, f, cv):
+    """m from the robot centre to the middle of the crossing tape, along the line, read with these parameters."""
+    a = math.radians(cal_angle_deg(m, h, tilt, xc, f, cv))
+    return float(np.mean([cal_along(v, col, a, h, tilt, xc, f, cv)[0] for col, near, far in m["edges"] for v in (near, far)]))
+
+
+def cal_tape_cm(m, h, tilt, f, cv):
+    """Width of the line (cm) read with these parameters: 2.5 when H_CAM and TILT are right."""
+    return float(np.median(100 * CAL_TAPE * m["widths"] / cal_width_px(m["rows"], h, tilt, f, cv)))
+
+
+def cal_residuals(p, data, f, cv, h_tape=None):
+    """Errors (px) of the model with p = (H_CAM, TILT, X_CAM) on every measurement; h_tape: H_CAM measured with a
+    ruler (m), kept within ~2 mm. A robot not square to the line (angle a, from the line itself): the crossing tape
+    edges are where the floor is d -+ CAL_TAPE/2 along the line, and the line looks 1/cos a wider."""
+    h, tilt, xc = p
+    r = []
+    for d, m in data:
+        a = math.radians(cal_angle_deg(m, h, tilt, xc, f, cv))
+        for col, near, far in m["edges"]:
+            for v, target in ((near, d - CAL_TAPE / 2), (far, d + CAL_TAPE / 2)):
+                along, per_row = cal_along(v, col, a, h, tilt, xc, f, cv)
+                r.append((along - target) / per_row)     # m -> rows
+        k = np.linspace(0, len(m["rows"]) - 1, min(20, len(m["rows"]))).astype(int)
+        r += list(cal_width_px(m["rows"][k], h, tilt, f, cv) / math.cos(a) - m["widths"][k])
+    if h_tape is not None:
+        r.append((h - h_tape) / 0.002)
+    return np.array(r, float)
+
+
+def cal_fit(data, f, cv, start, h_tape=None, iterations=50):
+    """Levenberg-Marquardt from start = (H_CAM, TILT, X_CAM). Returns (p, rms px)."""
+    p, lam = np.array(start, float), 1e-3
+    steps = np.array([1e-5, 1e-5, 1e-5])
+    cost = np.sum(cal_residuals(p, data, f, cv, h_tape) ** 2)
+    for _ in range(iterations):
+        r = cal_residuals(p, data, f, cv, h_tape)
+        J = np.stack([(cal_residuals(p + np.eye(3)[i] * steps[i], data, f, cv, h_tape) - r) / steps[i] for i in range(3)], 1)
+        A, g = J.T @ J, J.T @ r
+        while lam < 1e9:
+            q = p - np.linalg.solve(A + lam * np.diag(np.diag(A)), g)
+            c = np.sum(cal_residuals(q, data, f, cv, h_tape) ** 2)
+            if c < cost:
+                p, cost, lam = q, c, lam / 3
+                break
+            lam *= 4
+        else:
+            break
+    return p, math.sqrt(cost / len(cal_residuals(p, data, f, cv, h_tape)))
+
+
+def camcal(cam=None, frames=10):
+    """Camera geometry: robot still facing a crossing at 2-4 distances you measure; fits H_CAM, TILT_deg and X_CAM
+    to the tape edges and widths in the image, no detector in between (cal_* above)."""
+    own = cam is None
+    cam = cam or RobotHardware._open_camera()
+    f = LineFollower(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, TIME_STEP / 1000.0, V_MAX)
+    fx, cv = (f.nu / 2) / math.tan(CAM_FOV / 2), (f.nv - 1) / 2
+    now = (H_CAM, TILT, X_CAM)
+    near, far = floor_start(), float(cal_ahead_of(0, *now, fx, cv))
+    tries = ", ".join(f"{100 * x:.0f}" for x in (near + 0.08, (near + far) / 2 + 0.02, far - 0.05))
+    print(f"Robot still on a straight line, square to it, a crossing (+, T or L) ahead. The image sees the floor "
+          f"{100 * near:.0f}-{100 * far:.0f} cm ahead of the robot centre (midway between the axles). For each "
+          f"distance, measure with a tape from the robot centre to the MIDDLE of the crossing tape: e.g. {tries} cm.")
+    text = input("Camera lens height above the floor, with a ruler (cm; Enter to skip): ").strip().replace(",", ".")
+    h_tape = float(text) / 100 if text else None
+    data = []
+    try:
+        while True:
+            text = input(f"Distance {len(data) + 1} (cm; Enter = done): ").strip().replace(",", ".")
+            if not text:
+                break
+            try:
+                d = float(text) / 100
+            except ValueError:
+                print("  type a number")
+                continue
+            got, errors = [], []
+            for _ in range(frames):
+                try:
+                    got.append(cal_measure(f.grey(cam.capture_array()), fx))
+                except ValueError as e:
+                    errors.append(str(e))
+            if len(got) < frames // 2:
+                print(f"  not measured in {frames - len(got)}/{frames} images: {errors[-1]}")
+                continue
+            m = sorted(got, key=lambda g: g["edges"][0][1])[len(got) // 2]     # the median image
+            a = cal_angle_deg(m, *now, fx, cv)
+            read = cal_crossing_at(m, *now, fx, cv)
+            print(f"  read now {100 * read:.1f} cm (error {100 * (read - d):+.1f}), line {cal_tape_cm(m, now[0], now[1], fx, cv):.2f}"
+                  f" cm wide (tape 2.50), robot {a:+.1f} deg from the line")
+            if abs(a) > 5:
+                print("  robot not square to the line: turn it and measure this distance again")
+                continue
+            data.append((d, m))
+    finally:
+        if own:
+            cam.stop()
+    if len(data) < 2:
+        print("at least 2 distances are needed (3 are better)")
+        return
+    p, rms = cal_fit(data, fx, cv, now, h_tape)
+    print("distance   read now   read with the fit   line width now -> fit")
+    for d, m in data:
+        print(f"  {100 * d:5.1f} cm   {100 * cal_crossing_at(m, *now, fx, cv):5.1f} cm   {100 * cal_crossing_at(m, *p, fx, cv):5.1f} cm"
+              f"           {cal_tape_cm(m, now[0], now[1], fx, cv):.2f} -> {cal_tape_cm(m, p[0], p[1], fx, cv):.2f} cm")
+    print(f"params.ini [line_follower]: H_CAM = {p[0]:.3f}   TILT_deg = {math.degrees(p[1]):.1f}   X_CAM = {p[2]:.3f}")
+    print(f"  (now H_CAM = {H_CAM:.3f}   TILT_deg = {math.degrees(TILT):.1f}   X_CAM = {X_CAM:.3f}); fit residual {rms:.2f} px")
+    if rms > 2:
+        print("  residual above 2 px: a distance mistyped or measured from another point? Measure again")
+    rows = [cal_row_of(b, *now, fx, cv) for b in BANDS]
+    print(f"  BANDS that keep the follower on the same image rows (same steering): "
+          f"{[round(float(cal_ahead_of(r, *p, fx, cv)), 3) for r in rows]} (now {BANDS})")
 
 
 MAX_ERR = 0.10      # nodecam: a reading this far from the measured distance is another crossing, not this one
@@ -624,6 +839,6 @@ def summary(results):
 
 if __name__ == "__main__":
     modes = {"all": everything, "camera": camera, "live": live, "wheels": wheels, "encoders": encoders, "pi": pi,
-             "speed": speed, "turn": turn, "odometry": odometry, "nodecam": nodecam, "nodestop": nodestop,
-             "nodegap": nodegap, "nodewhy": nodewhy, "gridrecord": gridrecord}
+             "speed": speed, "turn": turn, "odometry": odometry, "camcal": camcal, "nodecam": nodecam,
+             "nodestop": nodestop, "nodegap": nodegap, "nodewhy": nodewhy, "gridrecord": gridrecord}
     modes[sys.argv[1] if len(sys.argv) > 1 else "all"]()
