@@ -34,3 +34,6 @@ out_test.png
 test.jpg
 # perception2.py
 test2.jpg
+
+# --- Local experiments (Webots test worlds, VM extern setup): not versioned ---
+/experiments/

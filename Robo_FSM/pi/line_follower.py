@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+import cv2
 import numpy as np
 
 H_CAM = 0.132
@@ -18,6 +19,14 @@ A_UP = 0.5
 A_DOWN = 1.5
 THRESHOLD = 150
 WIDTH = 480
+# Image filter (as in corner_detection_v4.py), against floor reflections that pass THRESHOLD.
+# The opening removes white blobs narrower than OPEN_W or shorter than OPEN_H (px at 640x480).
+# Keep OPEN_W well below the tape width (19 mm tape: 35 px on the far band, 68 px on the near one)
+# and OPEN_H below the height of a crossing tape on the far band (about 16 px).
+FILTER = True
+BLUR = 5
+OPEN_W, OPEN_H = 15, 5
+USE_OTSU = False  # True: threshold = max(Otsu, THRESHOLD); a large glare can then hide the tape
 
 OK, MEMORY, LOST = "OK", "MEMORY", "LOST"
 
@@ -54,14 +63,27 @@ class LineFollower:
         self.travelled = 0.0
         self.side = 1.0
         self.points = []  # (row, u, used) of the last image, in follower pixels: for the live view
+        self.kernel = np.ones((OPEN_H, OPEN_W), np.uint8)
 
     def _grey(self, img):
         p = self.px_step
         return img[::p, ::p, :3].mean(axis=2)[: self.nv, : self.nu]
 
+    def mask(self, img):
+        """1 where the follower sees the line (nv x nu, uint8): blur, threshold, then an opening."""
+        g = self._grey(img).astype(np.uint8)
+        if not FILTER:
+            return (g > THRESHOLD).astype(np.uint8)
+        g = cv2.blur(g, (BLUR, BLUR))
+        t = THRESHOLD
+        if USE_OTSU:
+            t = max(t, cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[0])
+        return cv2.morphologyEx((g > t).astype(np.uint8), cv2.MORPH_OPEN, self.kernel)
+
     @staticmethod
-    def _find_line(g, row, u_ref):
-        white = (g[row - 2 : row + 3].mean(axis=0) > THRESHOLD).astype(np.int8)
+    def _find_line(m, row, u_ref):
+        """m: mask from mask(). Centre of the white run on this row closest to u_ref, or None."""
+        white = (m[row - 2 : row + 3].mean(axis=0) > 0.5).astype(np.int8)
         edge = np.diff(np.concatenate(([0], white, [0])))
         start, end = np.flatnonzero(edge == 1), np.flatnonzero(edge == -1)
         ok = end - start >= 2
@@ -72,7 +94,7 @@ class LineFollower:
 
     def find_target(self, img):
         """Farthest band first, searched from the image centre, without touching u_prev. (L, y) or None."""
-        g = self._grey(img)
+        g = self.mask(img)
         points, target = [], None
         for dj, row, mj, wj in reversed(self.bands):
             u = self._find_line(g, row, self.cu)
@@ -103,7 +125,7 @@ class LineFollower:
             self.memory = None
 
     def step(self, img, v_max, v_prev, w_prev):
-        g = self._grey(img)
+        g = self.mask(img)
         target, points = None, []
         for j in reversed(range(len(self.bands))):
             dj, row, mj, wj = self.bands[j]

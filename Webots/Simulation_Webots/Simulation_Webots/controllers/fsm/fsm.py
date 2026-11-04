@@ -16,12 +16,17 @@ from line_follower import LineFollower
 
 TIME_STEP = 64      # ms
 AUTO_START = 1.0    # s; None = wait for a START command
+LIVE_VIEW = True    # Webots only: http://localhost:8000/ shows the camera, the mask and the line points
 
 
-def main(hw):
+def main(hw, live_view=False):
     """hw: a hardware.Hardware subclass (WebotsHardware, RobotHardware, SimHardware)."""
     width, height, fov = hw.camera_info()
     follower = LineFollower(width, height, fov, TIME_STEP / 1000.0, hw.wheel_v_max())
+    view = None
+    if live_view:
+        from live_view import LiveView
+        view = LiveView(follower)
     fsm = FSM(follower, Params(), on_change=lambda t, old, new, reason:
               print(f"[FSM] t={t:6.2f}s {old} -> {new} ({reason})"))
     path = os.environ.get("FSM_LOG") or os.path.join(
@@ -34,12 +39,15 @@ def main(hw):
             r = hw.read()
             if AUTO_START is not None and not started and r.t >= AUTO_START:
                 started, r.cmd = True, r.cmd or "START"
+            follower.points = []
             v, w = fsm.step(r)
             hw.wheels(v, w)
+            if view is not None:
+                view.update(r.image, follower.points)
             log.writerow([f"{r.t:.3f}", fsm.state, f"{v:.4f}", f"{w:.4f}", f"{fsm.d:.3f}", fsm.line])
     return fsm
 
 
 if __name__ == "__main__":
     from webots_hardware import WebotsHardware   # Webots only; the real robot will use its own class
-    main(WebotsHardware(TIME_STEP))
+    main(WebotsHardware(TIME_STEP), live_view=LIVE_VIEW)

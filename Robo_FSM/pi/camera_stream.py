@@ -6,7 +6,7 @@ Camera only:    python3 camera_stream.py       -> no Arduino needed, motors stay
 
 Open on the PC (same network):
     http://<pi-ip>:8000/        camera image + band rows used by the follower
-    http://<pi-ip>:8000/mask    what the follower sees as white (grey > THRESHOLD)
+    http://<pi-ip>:8000/mask    what the follower sees as white (after the filter in line_follower.py)
 
 With the FSM, both views also mark the line centre found on each band:
 green = point used as the target, magenta = line found but too far to the side.
@@ -17,7 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
 
-from line_follower import THRESHOLD, LineFollower
+from line_follower import LineFollower
 
 PORT = 8000
 FPS = 10           # stream rate; lower it if the FSM loop gets slow
@@ -54,7 +54,8 @@ class CameraStream:
         self.frame, self.points = None, ()
         self.lock = threading.Condition()
         # rows where the follower looks for the line (same maths as LineFollower)
-        self.rows = [b[1] for b in LineFollower(width, height, fov, 0.064, 1.0).bands]
+        self.follower = LineFollower(width, height, fov, 0.064, 1.0)
+        self.rows = [b[1] for b in self.follower.bands]
         self.px_step = max(1, width // 480)
         stream = self
 
@@ -86,9 +87,7 @@ class CameraStream:
 
     def _render(self, frame, points, mask):
         if mask:
-            p = self.px_step
-            grey = frame[::p, ::p, :3].mean(axis=2)
-            img = np.repeat(((grey > THRESHOLD) * 255).astype(np.uint8)[:, :, None], 3, axis=2)
+            img = np.repeat((self.follower.mask(frame) * 255)[:, :, None], 3, axis=2)
             scale = 1
         else:
             img = frame[:, :, :3].copy()
