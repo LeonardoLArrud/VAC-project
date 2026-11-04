@@ -14,7 +14,7 @@ SLOW_FRACTION = 0.25
 T_STATIC, T_MIN = 2.0, 0.3
 N_OK = 3
 SEARCH_RATE = TURN_RATE = 1.0
-TURN_MIN, TURN_MAX = math.radians(100), math.radians(420)
+TURN_MIN, TURN_MAX = math.radians(135), math.radians(420)
 TURN_TOL_Y = 0.04
 
 IDLE, FOLLOW, WAIT, SEARCH, TURN = "IDLE", "FOLLOW", "WAIT", "SEARCH", "TURN"
@@ -95,6 +95,7 @@ class FSM:
             if target is not None and abs(target[1]) <= TURN_TOL_Y:
                 self.end_turn(FOLLOW, f"turn done after {math.degrees(turned):.0f} deg, line ahead")
                 return 0.0, 0.0
+            self.n_ok = 0
         if turned >= TURN_MAX:
             self.end_turn(SEARCH, f"turned {math.degrees(turned):.0f} deg without the line")
             return 0.0, 0.0
