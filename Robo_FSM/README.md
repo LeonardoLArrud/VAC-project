@@ -51,3 +51,8 @@ Python literals, angles with `_deg` are in degrees; a missing or misspelled name
   at exit it prints `[CORNERS] ... images/s, ms each`: it needs about 5 images/s or more at `V0 = 0.25`.
 - Checks: `python3 diag.py encoders` (counts go up when each wheel turns forward), then `python3 diag.py pi` (robot suspended, each wheel near 0.10 m/s).
   PI gains `KP`, `KI` and feedforward `U0`, `KFF` at the top of `robo_fsm.ino`; `ENC_SIGN` flips an encoder that counts backwards.
+- Distance to a node (= odometry `s` + camera `d`), in this order:
+  1. `python3 diag.py odometry`: follows a straight line for 1 m by the encoders, you measure it with a tape: `WHEEL_R`.
+  2. `python3 diag.py nodecam`: robot still, a crossing at 2-3 distances you measure (robot centre to tape middle): `TILT_deg`.
+  3. `python3 diag.py nodestop`: follows the line and stops on a node centre with the FSM, you measure the error (cm).
+     It also prints the loop period: well above `TIME_STEP`, the robot sees fewer images per node.

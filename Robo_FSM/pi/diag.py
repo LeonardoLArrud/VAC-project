@@ -1,5 +1,9 @@
 """Checks on the real robot (Arduino with robo_fsm.ino).
-python3 diag.py [all] | camera | live | wheels | encoders | pi | speed | turn
+python3 diag.py [all] | camera | live | wheels | encoders | pi | speed | turn | odometry | nodecam | nodestop
+Distance to a node = odometry s + camera d. Calibrate them in this order:
+  odometry  follows a straight line for 1 m by the encoders, you measure it: WHEEL_R
+  nodecam   robot still, a crossing at a distance you measure: TILT_deg
+  nodestop  the whole chain: follows the line and stops on a node centre (as before a turn), you measure the error
 """
 import math
 import sys
@@ -9,7 +13,10 @@ import cv2
 import numpy as np
 import serial
 
-from line_follower import THRESHOLD, LineFollower
+from fsm import FOLLOW, FSM, IDLE, NODES, TIME_STEP
+from line_follower import H_CAM, K, LOST, THRESHOLD, TILT, X_CAM, LineFollower
+from navigators import OrderList
+from node_detector import ZONE, NodeDetector
 from robot_hardware import (
     CAM_FOV,
     CAM_HEIGHT,
@@ -165,6 +172,166 @@ def turn():
     print(f"line_follower.py: K = {(v_right - v_left) * seconds / (2 * math.radians(deg)):.3f}")
 
 
+def loop_report(periods):
+    """Loop period of the drives below: if it is much above TIME_STEP, the robot sees fewer images per metre."""
+    if len(periods) > 2:
+        p = 1000 * np.array(periods[1:])
+        print(f"  loop: mean {p.mean():.0f} ms, max {p.max():.0f} ms (target {TIME_STEP} ms)")
+
+
+def settle(hw, seconds=1.0):
+    """Wheels at 0 until the robot is surely still (it coasts a little)."""
+    t_end = time.monotonic() + seconds
+    while hw.step() and time.monotonic() < t_end:
+        hw.set_wheels(0.0, 0.0)
+
+
+def drive_line(hw, f, metres, v=0.15):
+    """Follows the line for `metres` of odometry, stops; returns the odometry travelled once still."""
+    s0, vc, wc, periods, t = hw.distance(), 0.0, 0.0, [], time.monotonic()
+    while hw.step() and hw.distance() - s0 < metres:
+        periods.append(time.monotonic() - t)
+        t = time.monotonic()
+        out = f.step(hw.camera_image(), v, vc, wc)
+        if out.status == LOST:
+            print("  line lost: put the robot back on a straight line")
+            break
+        vc, wc = out.v, out.w
+        hw.set_wheels(vc - K * wc, vc + K * wc)
+    settle(hw)
+    loop_report(periods)
+    return hw.distance() - s0
+
+
+def ask_number(text):
+    while True:
+        try:
+            return float(input(text).strip().replace(",", "."))
+        except ValueError:
+            print("  type a number")
+
+
+def odometry(hw=None, metres=1.0):
+    """Odometry scale: s (and so where the robot thinks a node is) must be true metres. Corrects WHEEL_R."""
+    if not USE_ENCODERS:
+        print("USE_ENCODERS = False: the distance comes from the commanded speed; calibrate V_MAX with diag.py speed")
+        return
+    hw = hw or RobotHardware(TIME_STEP)
+    f = LineFollower(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, TIME_STEP / 1000.0, V_MAX)
+    ratios = []
+    while True:
+        input(f"Robot on a straight line with {metres + 0.3:.1f} m free ahead. Mark on the floor a fixed point of the "
+              f"robot (e.g. its front edge). Enter -> follows the line for {100 * metres:.0f} cm by the encoders")
+        s = drive_line(hw, f, metres)
+        if s < 0.5 * metres:
+            print(f"  only {100 * s:.0f} cm by the encoders: try again")
+            continue
+        real = ask_number(f"  encoders: {100 * s:.1f} cm. How far the mark moved, measured with a tape (cm): ") / 100
+        ratios.append(real / s)
+        print(f"  real / encoders = {ratios[-1]:.4f}")
+        if not input("Again? 2 or 3 runs are better [y/N] ").strip().lower().startswith("y"):
+            break
+    r = float(np.mean(ratios))
+    print(f"params.ini [robot_hardware]: WHEEL_R = {WHEEL_R * r:.4f}   (now {WHEEL_R}, x{r:.4f} from {len(ratios)} run(s))")
+    print("  so that the wheel speeds match too, put the same value in robo_fsm.ino (const float WHEEL_R) and upload it")
+
+
+def node_distances(cam, f, det, corners, frames=20):
+    """Median distance (m) to the crossing ahead read by the bars and by the corners, over `frames` images."""
+    import corner_detector
+
+    bars, cross = [], []
+    for _ in range(frames):
+        img = cam.capture_array()
+        bar = det._bar(f.mask(img)[det.rows] > 0)
+        if bar:
+            bars.append(bar[0])
+        centre, _, _ = corner_detector._detect(img, corners.scale)
+        d = corners._ahead(centre) if centre else None
+        if d:
+            cross.append(d)
+    return [(name, float(np.median(xs)) if xs else None, len(xs)) for name, xs in (("bars", bars), ("corners", cross))]
+
+
+def tilt_for(true_d, read_d):
+    """TILT with which the same image row would give the true distance (the row is angle = ray - TILT)."""
+    return TILT + math.atan2(H_CAM, true_d - X_CAM) - math.atan2(H_CAM, read_d - X_CAM)
+
+
+def nodecam(cam=None, frames=20):
+    """Camera distance to a node: robot still, a crossing at distances you measure. Corrects TILT_deg."""
+    from corner_detector import CornerDetector
+
+    own = cam is None
+    cam = cam or RobotHardware._open_camera()
+    f = LineFollower(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, TIME_STEP / 1000.0, V_MAX)
+    det = NodeDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, f.mask)
+    corners = CornerDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, parallel=None)
+    print(f"Robot still on the line, a crossing ahead. Measure from the robot centre (midway between the front and rear "
+          f"axles) to the middle of the crossing tape. Bars read {100 * ZONE[0]:.0f}-{100 * ZONE[1]:.0f} cm, corners "
+          f"~30-55 cm (a '+' only): try 2 or 3 distances, e.g. 45, 52 and 60 cm.")
+    tilts = []
+    try:
+        while True:
+            text = input("  measured distance in cm (Enter = done): ").strip().replace(",", ".")
+            if not text:
+                break
+            true_d = float(text) / 100
+            for name, d, n in node_distances(cam, f, det, corners, frames):
+                if d is None:
+                    print(f"    {name}: not seen in {frames} images")
+                    continue
+                tilts.append(tilt_for(true_d, d))
+                print(f"    {name}: {100 * d:.1f} cm ({n}/{frames} images), error {100 * (d - true_d):+.1f} cm"
+                      f" -> TILT {math.degrees(tilts[-1]):.2f} deg")
+    finally:
+        if own:
+            cam.stop()
+    if tilts:
+        t = float(np.median(tilts))
+        print(f"params.ini [line_follower]: TILT_deg = {math.degrees(t):.1f}   (now {math.degrees(TILT):.1f}, "
+              f"from {len(tilts)} reading(s))")
+        if math.degrees(max(tilts) - min(tilts)) > 1.0:
+            print("  the readings disagree by more than 1 deg: measure H_CAM and X_CAM again")
+
+
+def nodestop(hw=None):
+    """The whole chain, with the FSM: follows the line, a node is announced, it stops on the node centre."""
+    from corner_detector import CornerDetector, NodeFusion
+
+    hw = hw or RobotHardware(TIME_STEP)
+    f = LineFollower(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, TIME_STEP / 1000.0, V_MAX)
+    det = NodeDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, f.mask)
+    if NODES != "bars":
+        corners = CornerDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV)
+        det = corners if NODES == "corners" else NodeFusion(det, corners)
+    fsm = FSM(f, nav=lambda: OrderList(["STOP"]))      # stops at the first node, as it does before a turn
+    input("Robot on a line, 0.8 to 1.5 m before a node. Enter -> follows the line and stops on the node centre")
+    cmd, periods, t0 = "START", [], time.monotonic()
+    while hw.step():
+        periods.append(time.monotonic() - t0)
+        t0 = time.monotonic()
+        image, s = hw.camera_image(), hw.distance()
+        node = det.step(image, s, fsm.state == FOLLOW)
+        if node:
+            print(f"  node announced {100 * node[0]:.1f} cm ahead, exits {''.join(sorted(node[1]))}")
+        v, w = fsm.step(hw.time(), image, hw.obstacle_distance(), hw.heading(), cmd, s, node)
+        cmd = None
+        hw.set_wheels(v - K * w, v + K * w)
+        if fsm.state == IDLE and len(fsm.history) > 1:
+            break
+    settle(hw)
+    loop_report(periods)
+    if not fsm.reason.startswith("STOP at the node"):
+        print(f"  did not stop at a node: {fsm.reason}")
+        return
+    est = hw.distance() - fsm.s_node
+    real = ask_number(f"  odometry: robot centre {100 * est:+.1f} cm from the node centre. Measured with a tape "
+                      f"(cm, + = past the centre, - = before it): ") / 100
+    print(f"  node position error: {100 * (est - real):+.1f} cm (> 0: the robot thinks it is further than it is)")
+    print("  with WHEEL_R calibrated (odometry), this is the camera distance: correct TILT_deg with nodecam")
+
+
 NAMES = ("FR", "FL", "RR", "RL")
 
 
@@ -257,5 +424,5 @@ def summary(results):
 
 if __name__ == "__main__":
     modes = {"all": everything, "camera": camera, "live": live, "wheels": wheels, "encoders": encoders, "pi": pi,
-             "speed": speed, "turn": turn}
+             "speed": speed, "turn": turn, "odometry": odometry, "nodecam": nodecam, "nodestop": nodestop}
     modes[sys.argv[1] if len(sys.argv) > 1 else "all"]()
