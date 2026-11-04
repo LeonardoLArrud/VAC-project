@@ -60,6 +60,10 @@ class Hardware:
         heading = r * (mean(phi_right) - mean(phi_left)) / (2 * K_WHEELS)."""
         raise NotImplementedError("Hardware.heading")
 
+    def distance(self) -> float:
+        """HOOK. Distance rolled since start, m: mean of the 4 encoder angles x wheel radius."""
+        raise NotImplementedError("Hardware.distance")
+
     def command(self) -> str | None:
         """HOOK. "START", "STOP" or None, from a key, a button or the central (WiFi)."""
         raise NotImplementedError("Hardware.command")
@@ -82,7 +86,8 @@ class Hardware:
 
     # ------------------------------------------------------------ glue (do not change)
     def read(self) -> Reading:
-        return Reading(self.time(), self.camera_image(), self.obstacle_distance(), self.heading(), self.command())
+        return Reading(self.time(), self.camera_image(), self.obstacle_distance(), self.heading(), self.command(),
+                       self.distance())
 
     def wheels(self, v: float, w: float) -> None:
         self.set_wheels(v - K_WHEELS * w, v + K_WHEELS * w)
