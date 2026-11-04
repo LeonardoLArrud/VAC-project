@@ -20,7 +20,7 @@ import cv2
 import numpy as np
 
 from line_follower import H_CAM, TILT, X_CAM
-from node_detector import N_FRAMES, S_TOL, SAME, ZONE
+from node_detector import MISS, N_FRAMES, S_TOL, SAME, ZONE
 
 # values: params.ini [corner_detector]; these defaults are the ones of corner_detection_v4.py
 PARALLEL = "process"            # "process" (another CPU core), "thread", or None (inside the FSM loop)
@@ -99,7 +99,7 @@ class CornerDetector:
         self.scale = width / REF_WIDTH
         self.f = (width / 2) / math.tan(fov / 2)
         self.cv = (height - 1) / 2
-        self.cand, self.last = None, -1.0        # as in NodeDetector: [sum of s + d, frames]; last s_node
+        self.cand, self.last = None, -1.0        # as in NodeDetector: [sum of s + d, frames, misses]; last s_node
         self.n = 0
         self.ms = 0.0
         self.t0 = time.monotonic()
@@ -166,10 +166,14 @@ class CornerDetector:
         c = self.cand
         if d is not None and abs(s + d - self.last) > SAME:
             if c and abs(s + d - c[0] / c[1]) <= S_TOL:
-                c[0], c[1] = c[0] + s + d, c[1] + 1
+                c[0], c[1], c[2] = c[0] + s + d, c[1] + 1, 0
             elif not c or c[1] < N_FRAMES:
-                self.cand = [s + d, 1]
-        elif c and (c[1] < N_FRAMES or c[0] / c[1] - s > ZONE[0] + 0.05):   # not seen where it should be
+                self.cand = [s + d, 1, 0]
+        elif c and c[1] < N_FRAMES:               # crossing lost while confirming: tolerate MISS results
+            c[2] += 1
+            if c[2] > MISS:
+                self.cand = None
+        elif c and c[0] / c[1] - s > ZONE[0] + 0.05:   # confirmed but not seen where it should be
             self.cand = None
 
     def _announce(self, s):
