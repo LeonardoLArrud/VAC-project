@@ -9,9 +9,9 @@ from line_follower import LOST, OK, V0, K, LineFollower
 TIME_STEP = 64
 AUTO_START = 1.0
 
-D_STOP, D_CLEAR, D_SLOW = 0.25, 0.35, 0.60
+D_STOP, D_SLOW = 0.25, 0.60
 SLOW_FRACTION = 0.25
-T_CLEAR, T_STATIC, T_MIN = 1.0, 3.0, 0.3
+T_STATIC, T_MIN = 2.0, 0.3
 N_OK = 3
 SEARCH_RATE = TURN_RATE = 1.0
 TURN_MIN, TURN_MAX = math.radians(135), math.radians(420)
@@ -28,7 +28,7 @@ class FSM:
         self.v = self.w = 0.0
         self.d, self.dists = float("inf"), deque(maxlen=3)
         self.line, self.side = LOST, 1.0
-        self.n_ok, self.t_clear = 0, None
+        self.n_ok = 0
 
     def step(self, t, image, dist, heading, cmd):
         self.t, self.heading = t, heading
@@ -45,7 +45,7 @@ class FSM:
         print(f"[FSM] t={self.t:6.2f}s {self.state} -> {new} ({reason})")
         self.history.append((self.t, self.state, new, reason))
         self.state, self.reason = new, reason
-        self.t_enter, self.heading0, self.n_ok, self.t_clear = self.t, self.heading, 0, None
+        self.t_enter, self.heading0, self.n_ok = self.t, self.heading, 0
 
     def look(self, image):
         out = self.follower.step(image, 0.0, 0.0, self.w)
@@ -67,14 +67,10 @@ class FSM:
         return out.v, out.w
 
     def wait(self, image, cmd):
-        if self.d > D_CLEAR:
-            self.t_clear = self.t if self.t_clear is None else self.t_clear
-            if self.t - self.t_clear >= T_CLEAR:
-                self.go(FOLLOW, "obstacle cleared")
-        else:
-            self.t_clear = None
-            if self.t - self.t_enter >= T_STATIC:
-                self.go(TURN, f"still blocked after {T_STATIC:.0f} s: U-turn")
+        if self.d > D_STOP:
+            self.go(FOLLOW, "obstacle left: not static")
+        elif self.t - self.t_enter >= T_STATIC:
+            self.go(TURN, f"still blocked after {T_STATIC:.0f} s: U-turn")
         return 0.0, 0.0
 
     def search(self, image, cmd):
@@ -90,21 +86,25 @@ class FSM:
         return 0.0, self.side * SEARCH_RATE
 
     def turn(self, image, cmd):
+        """Spin left until the line is ahead and centred: at least TURN_MIN (so it does not stop on the
+        line it came from), at most TURN_MAX (over 360 deg on purpose: the wheels slip)."""
         turned = abs(self.heading - self.heading0)
         if turned >= TURN_MIN:
-            target = self.follower.find(image)
+            target = self.follower.find_target(image)
             self.line = LOST if target is None else OK
             if target is not None and abs(target[1]) <= TURN_TOL_Y:
-                self.n_ok += 1
-                if self.n_ok >= N_OK:
-                    self.follower.reset()
-                    self.go(FOLLOW, f"turned {math.degrees(turned):.0f} deg, line ahead")
+                self.end_turn(FOLLOW, f"turn done after {math.degrees(turned):.0f} deg, line ahead")
                 return 0.0, 0.0
             self.n_ok = 0
         if turned >= TURN_MAX:
-            self.go(IDLE, f"turned {math.degrees(TURN_MAX):.0f} deg without the line")
+            self.end_turn(SEARCH, f"turned {math.degrees(turned):.0f} deg without the line")
             return 0.0, 0.0
         return 0.0, TURN_RATE
+
+    def end_turn(self, new, reason):
+        self.dists.clear()
+        self.follower.reset()
+        self.go(new, reason)
 
 
 def main(hw):
@@ -118,8 +118,11 @@ def main(hw):
             t, cmd = hw.time(), hw.command()
             if AUTO_START is not None and not fsm.history and t >= AUTO_START:
                 cmd = cmd or "START"
+            fsm.follower.points = []
             v, w = fsm.step(t, hw.camera_image(), hw.obstacle_distance(), hw.heading(), cmd)
             hw.set_wheels(v - K * w, v + K * w)
+            if hasattr(hw, "show"):
+                hw.show(fsm.follower.points)
             log.writerow([f"{t:.3f}", fsm.state, f"{v:.4f}", f"{w:.4f}", f"{fsm.d:.3f}", fsm.line])
     return fsm
 

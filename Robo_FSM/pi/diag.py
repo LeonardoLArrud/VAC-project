@@ -24,16 +24,15 @@ from robot_hardware import (
 
 
 def draw(f, img):
-    g = f._grey(img)
+    g, m = f._grey(img), f.mask(img)
     out = cv2.cvtColor(g.astype(np.uint8), cv2.COLOR_GRAY2BGR)
     for dj, row, mj, wj in f.bands:
-        band = g[row - 2 : row + 3].mean(axis=0)
         cv2.line(out, (0, row), (f.nu - 1, row), (0, 255, 0), 1)
-        out[row, band > THRESHOLD] = (0, 0, 255)
-        u = f._find_line(g, row, f.cu, mj)
+        out[row, m[row] > 0] = (0, 0, 255)
+        u = f._find_line(m, row, f.cu)
         if u is not None:
             cv2.circle(out, (int(u), row), 6, (255, 0, 0), 2)
-    return g, out
+    return g, m, out
 
 
 def camera():
@@ -41,19 +40,19 @@ def camera():
     img = cam.capture_array()
     cam.stop()
     f = LineFollower(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, 0.064, V_MAX)
-    g, out = draw(f, img)
+    g, m, out = draw(f, img)
     print(f"image {img.shape}, grey min {g.min():.0f} median {np.median(g):.0f} max {g.max():.0f}, THRESHOLD {THRESHOLD}")
     for dj, row, mj, wj in f.bands:
         band = g[row - 2 : row + 3].mean(axis=0)
-        u = f._find_line(g, row, f.cu, mj)
+        u = f._find_line(m, row, f.cu)
         text = "no line"
         if u is not None:
             y = -mj * (u - f.cu)
             text = f"line at u={u:.0f} px, Y={100 * y:+.1f} cm ({'left' if y > 0 else 'right'}), valid {abs(y) <= 0.7 * wj}"
         print(f"band {dj:.2f} m, row {row}: grey min {band.min():.0f} max {band.max():.0f}, "
-              f"{(band > THRESHOLD).sum()} px above THRESHOLD, {text}")
+              f"{(band > THRESHOLD).sum()} px above THRESHOLD, {int(m[row].sum())} after the filter, {text}")
     cv2.imwrite("diag.png", out)
-    print("saved diag.png: green = bands, red = pixels above THRESHOLD, blue = line chosen")
+    print("saved diag.png: green = bands, red = line pixels after the filter, blue = line chosen")
 
 
 def live():
@@ -188,7 +187,7 @@ def everything():
         results.append((name, ok, detail))
         print(f"  {'OK   ' if ok else 'FAIL '} {name}: {detail}")
 
-    input("1/4 Robot on the floor, line 5-10 cm to the LEFT of the robot's centre. Enter")
+    input("1/4 Robot on the floor, line a few cm to the LEFT of the robot's centre. Enter")
     ser = open_serial()
     time.sleep(0.3)
     st = status(ser)
@@ -204,23 +203,19 @@ def everything():
     img = cam.capture_array()
     cam.stop()
     f = LineFollower(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, 0.064, V_MAX)
-    g, out = draw(f, img)
+    g, m, out = draw(f, img)
     cv2.imwrite("diag.png", out)
     found = []
     for dj, row, mj, wj in f.bands:
-        u = f._find_line(g, row, f.cu, mj)
+        u = f._find_line(m, row, f.cu)
         if u is not None and abs(-mj * (u - f.cu)) <= 0.7 * wj:
             found.append((dj, -mj * (u - f.cu)))
     check("Line seen", bool(found), f"{len(found)}/{len(f.bands)} bands (diag.png saved)" if found else
           f"no band: grey {g.min():.0f}..{g.max():.0f}, adjust THRESHOLD ({THRESHOLD}) and look at diag.png")
     if found:
         y = found[0][1]
-        if abs(y) < 0.03:
-            check("Image orientation", False, f"line at Y = {100 * y:+.1f} cm, too close to the centre to tell: "
-                  "move it 5-10 cm to the LEFT and rerun")
-        else:
-            check("Image orientation", y > 0, f"line at Y = {100 * y:+.1f} cm ({'left' if y > 0 else 'RIGHT'})"
-                  + ("" if y > 0 else ": image mirrored, check CAM_ROTATED_180 in robot_hardware.py"))
+        check("Image orientation", y > 0, f"line at Y = {100 * y:+.1f} cm ({'left' if y > 0 else 'RIGHT'})"
+              + ("" if y > 0 else ": image mirrored, check CAM_ROTATED_180 in robot_hardware.py"))
 
     if not st:
         return summary(results)

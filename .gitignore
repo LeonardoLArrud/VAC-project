@@ -1,0 +1,39 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+._*
+Thumbs.db
+
+# --- Project: images regenerated every time the scripts run ---
+# corner_detection*.py, code2.py
+out_test.png
+# perception1.py
+test.jpg
+# perception2.py
+test2.jpg
+
+# --- Local experiments (Webots test worlds, VM extern setup): not versioned ---
+/experiments/
