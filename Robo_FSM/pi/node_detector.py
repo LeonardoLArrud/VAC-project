@@ -53,6 +53,7 @@ class NodeDetector:
         self.o_side = np.linspace(SIDE[0], SIDE[1], 25)
         self.o_axis = np.linspace(-AXIS, AXIS, 9)
         self.cand, self.last = None, -1.0         # [sum of s + d, frames, exits, misses]; last s_node
+        self.why = ""                            # find(): why the last image gave no bar, or what it found
 
     def _row(self, x):
         """m ahead -> image row (follower pixels)."""
@@ -83,7 +84,8 @@ class NodeDetector:
         """Mask of the ROI rows (bool): blur + Otsu, at least CONTRAST above the floor median."""
         g = cv2.blur(self.grey(image)[self.r0 : self.r1 + 1], (3, 3))
         otsu = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[0]
-        return g > max(otsu, float(np.median(g)) + CONTRAST)
+        self.threshold = max(otsu, float(np.median(g)) + CONTRAST)
+        return g > self.threshold
 
     def _line(self, w):
         """(a, b, x of its points) of the line y = a + b x (m), from the narrow white runs; None if not seen."""
@@ -95,15 +97,18 @@ class NodeDetector:
         ok = (width >= 0.01) & (width <= LINE_W)          # narrow runs: the line
         r, y = r[ok], -self.m[r[ok]] * ((start[ok] + end[ok] - 1) / 2 - self.cu)
         if len(r) < 4:
+            self.why = f"no line: {len(r)} white runs 1-{100 * LINE_W:.1f} cm wide (needs 4)"
             return None
         order = np.lexsort((np.abs(y), r))                # per row, the run nearest the robot axis first
         first = order[np.r_[True, np.diff(r[order]) != 0]]
         if len(first) < 4:
+            self.why = f"no line: narrow runs on {len(first)} rows (needs 4)"
             return None
         x, y = self.x[r[first]], y[first]
         b, a = np.polyfit(x, y, 1)
         keep = np.abs(y - (a + b * x)) <= 0.02      # drop runs that are not the line
         if keep.sum() < 4:
+            self.why = f"no line: only {keep.sum()} runs on a straight line (needs 4)"
             return None
         b, a = np.polyfit(x[keep], y[keep], 1)
         return a, b, x[keep]
@@ -132,15 +137,24 @@ class NodeDetector:
         left, right = self._strip(w, a, b, self.o_side), self._strip(w, a, b, -self.o_side)
         side = (left >= FULL) | (right >= FULL)
         k = np.flatnonzero(side & (self.xs <= ZONE[1]))
+        line_txt = f"line at {100 * a:+.1f} cm, {math.degrees(math.atan(b)):+.0f} deg"
         if not len(k):
+            zone = self.xs <= ZONE[1]
+            self.why = (f"no bar: {line_txt}; whitest strip beside it in the zone: left {left[zone].max():.0%}, "
+                        f"right {right[zone].max():.0%} (needs {FULL:.0%})")
             return None
         k = k[: np.argmax(np.r_[np.diff(k) > 2, True]) + 1]      # nearest bar: cuts until the first gap
         thick = (k[-1] - k[0] + 1) * STEP
         d = float(self.xs[k].mean())
-        if not THICK[0] <= thick <= THICK[1] or (xl < d - 0.03).sum() < 3:   # not a tape, or no line before it
+        if not THICK[0] <= thick <= THICK[1]:     # not a tape
+            self.why = f"bar at {100 * d:.0f} cm rejected: {100 * thick:.1f} cm thick (accepted {100 * THICK[0]:.1f}-{100 * THICK[1]:.1f})"
+            return None
+        if (xl < d - 0.03).sum() < 3:             # no line coming to it
+            self.why = f"bar at {100 * d:.0f} cm rejected: no line before it"
             return None
         exits = {e for e, f in (("L", left), ("R", right)) if (f[k] >= FULL).mean() >= 0.5}
         beyond = (self.xs >= d + BEYOND[0]) & (self.xs <= d + BEYOND[1]) & ~side
         if ((self._strip(w, a, b, self.o_axis) >= 0.5) & beyond).sum() >= 3:
             exits.add("S")
+        self.why = f"bar at {100 * d:.1f} cm, {100 * thick:.1f} cm thick, exits {''.join(sorted(exits))}; {line_txt}"
         return d, exits

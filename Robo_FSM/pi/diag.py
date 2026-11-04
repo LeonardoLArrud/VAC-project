@@ -1,10 +1,11 @@
 """Checks on the real robot (Arduino with robo_fsm.ino).
-python3 diag.py [all] | camera | live | wheels | encoders | pi | speed | turn | odometry | nodecam | nodestop | nodegap
+python3 diag.py [all] | camera | live | wheels | encoders | pi | speed | turn | odometry | nodecam | nodestop | nodegap | nodewhy
 Distance to a node = odometry s + camera d. Calibrate them in this order:
   odometry  follows a straight line for 1 m by the encoders, you measure it: WHEEL_R
   nodecam   robot still, a crossing at a distance you measure: TILT_deg
   nodestop  the whole chain: follows the line and stops on a node centre (as before a turn), you measure the error
   nodegap   follows a grid line through several nodes: the spacing between nodes (last number of MISSION)
+nodewhy: robot still before a node: what the bars and corners detectors see, and why they give no node
 """
 import math
 import sys
@@ -296,6 +297,34 @@ def nodecam(cam=None, frames=20):
             print("  the readings disagree by more than 1 deg: measure H_CAM and X_CAM again")
 
 
+def nodewhy(period=0.5):
+    """Robot still (or pushed by hand) before a node: every period, what each detector sees in the image and
+    why it gives no node. Saves the last image as nodewhy.jpg and the bars mask as nodewhy_mask.png. Ctrl+C stops."""
+    import corner_detector
+    from corner_detector import CornerDetector
+
+    cam = RobotHardware._open_camera()
+    f = LineFollower(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, TIME_STEP / 1000.0, V_MAX)
+    det = NodeDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, f.grey)
+    corners = CornerDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, parallel=None)
+    print(f"Robot on the line, a node {100 * ZONE[0]:.0f}-{100 * ZONE[1]:.0f} cm ahead (robot centre to the crossing tape).")
+    try:
+        while True:
+            img = cam.capture_array()
+            det.find(img)
+            centre, n, _ = corner_detector._detect(f.grey(img), corners.scale)
+            d = corners._ahead(centre) if centre else None
+            seen = f"'+' at {100 * d:.0f} cm" if d else "no '+'"
+            print(f"bars (threshold {det.threshold:.0f}): {det.why}\n  corners: {n} concave corners, {seen}")
+            cv2.imwrite("nodewhy.jpg", img)
+            cv2.imwrite("nodewhy_mask.png", det.white(img).astype(np.uint8) * 255)
+            time.sleep(period)
+    except KeyboardInterrupt:
+        print("saved nodewhy.jpg (camera) and nodewhy_mask.png (what the bars detector sees as white)")
+    finally:
+        cam.stop()
+
+
 def nodestop(hw=None):
     """The whole chain, with the FSM: follows the line, a node is announced, it stops on the node centre."""
     hw = hw or RobotHardware(TIME_STEP)
@@ -477,5 +506,5 @@ def summary(results):
 if __name__ == "__main__":
     modes = {"all": everything, "camera": camera, "live": live, "wheels": wheels, "encoders": encoders, "pi": pi,
              "speed": speed, "turn": turn, "odometry": odometry, "nodecam": nodecam, "nodestop": nodestop,
-             "nodegap": nodegap}
+             "nodegap": nodegap, "nodewhy": nodewhy}
     modes[sys.argv[1] if len(sys.argv) > 1 else "all"]()
