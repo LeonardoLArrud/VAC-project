@@ -13,6 +13,7 @@ the current position with the odometry s of its image. The time per detection is
 import atexit
 import math
 import multiprocessing as mp
+import signal
 import threading
 import time
 
@@ -85,13 +86,17 @@ def _detect(img, scale):
 
 def _process_main(conn, scale):
     """The other process: receives (s, grey image), answers (s, centre, n, ms)."""
+    signal.signal(signal.SIGINT, signal.SIG_IGN)   # Ctrl+C stops the FSM; this process ends with it
     cv2.setNumThreads(1)        # this process keeps to one core; the FSM loop has the others
-    while True:
-        job = conn.recv()
-        if job is None:
-            return
-        s, grey = job
-        conn.send((s,) + _detect(grey, scale))
+    try:
+        while True:
+            job = conn.recv()
+            if job is None:
+                return
+            s, grey = job
+            conn.send((s,) + _detect(grey, scale))
+    except (EOFError, OSError):   # the FSM program has stopped
+        return
 
 
 class CornerDetector:
@@ -127,8 +132,9 @@ class CornerDetector:
             with self.cond:
                 self.result = result
 
-    def step(self, image, s):
-        """Hand the image to the detector, use the newest result. (d, exits) once per node, else None."""
+    def step(self, image, s, announce=True):
+        """Hand the image to the detector, use the newest result. (d, exits) once per node, else None.
+        announce=False: keeps tracking but announces nothing (the FSM is not following the line)."""
         if self.parallel == "process":
             try:
                 if self.busy and self.conn.poll():
@@ -152,7 +158,7 @@ class CornerDetector:
                 self._use(*result)
         else:
             self._use(s, *_detect(image, self.scale))
-        return self._announce(s)
+        return self._announce(s) if announce else None
 
     def _ahead(self, centre):
         """Image row of the crossing centre -> m ahead of the robot centre (as NodeDetector.x)."""
@@ -197,10 +203,10 @@ class NodeFusion:
     def __init__(self, *detectors):
         self.detectors, self.last = detectors, -1.0
 
-    def step(self, image, s):
+    def step(self, image, s, announce=True):
         node = None
         for det in self.detectors:
-            seen = det.step(image, s)            # every detector keeps tracking
+            seen = det.step(image, s, announce)  # every detector keeps tracking
             if seen and node is None and abs(s + seen[0] - self.last) > SAME:
                 node = seen
         if node:

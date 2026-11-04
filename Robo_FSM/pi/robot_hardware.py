@@ -166,4 +166,7 @@ class RobotHardware:
 if __name__ == "__main__":
     from fsm import TIME_STEP, main
 
-    main(RobotHardware(TIME_STEP))
+    try:
+        main(RobotHardware(TIME_STEP))
+    except KeyboardInterrupt:           # Ctrl+C: the normal way to stop (the motors stop on exit)
+        print("\nstopped (Ctrl+C)")

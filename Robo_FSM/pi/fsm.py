@@ -229,7 +229,7 @@ def main(hw, nav=Explorer):
             if AUTO_START is not None and not fsm.history and t >= AUTO_START:
                 cmd = cmd or MISSION or "START"
             image, s = hw.camera_image(), hw.distance()
-            node = detector.step(image, s)
+            node = detector.step(image, s, fsm.state == FOLLOW)   # nodes are only used (announced) in FOLLOW
             if node:
                 print(f"[NODE] t={t:6.2f}s s={s:.3f} d={node[0]:.3f} exits={sorted(node[1])}")
             fsm.follower.points = []
@@ -245,4 +245,7 @@ def main(hw, nav=Explorer):
 if __name__ == "__main__":
     from robot_hardware import RobotHardware
 
-    main(RobotHardware(TIME_STEP))
+    try:
+        main(RobotHardware(TIME_STEP))
+    except KeyboardInterrupt:           # Ctrl+C: the normal way to stop (the motors stop on exit)
+        print("\nstopped (Ctrl+C)")

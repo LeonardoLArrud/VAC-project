@@ -34,7 +34,9 @@ class NodeDetector:
         self.cu = (nu - 1) / 2
         self.cand, self.last = None, -1.0         # [sum of s + d, frames, exits, misses]; last s_node
 
-    def step(self, image, s):
+    def step(self, image, s, announce=True):
+        """announce=False: keeps tracking the bar but announces nothing (the FSM is not following the line:
+        a node announced then would be lost, and taken as already seen afterwards)."""
         bar, c = self._bar(self.mask(image)[self.rows] > 0), self.cand
         if bar and abs(s + bar[0] - self.last) > SAME:
             if c and abs(s + bar[0] - c[0] / c[1]) <= S_TOL:
@@ -48,7 +50,7 @@ class NodeDetector:
         elif c and c[0] / c[1] - s > ZONE[0] + 0.05:   # confirmed but not seen where it should be
             self.cand = None
         c = self.cand
-        if c and c[1] >= N_FRAMES and c[0] / c[1] - s <= ZONE[0]:
+        if announce and c and c[1] >= N_FRAMES and c[0] / c[1] - s <= ZONE[0]:
             self.cand, self.last = None, c[0] / c[1]
             return self.last - s, c[2]
         return None
