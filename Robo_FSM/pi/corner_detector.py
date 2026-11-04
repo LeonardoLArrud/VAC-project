@@ -101,7 +101,9 @@ def _process_main(conn, scale):
 
 
 class CornerDetector:
-    def __init__(self, width, height, fov, parallel=PARALLEL):
+    def __init__(self, width, height, fov, parallel=PARALLEL, grey=None):
+        """grey: LineFollower.grey (full-size grey), so the image is turned grey once per frame."""
+        self.grey = grey or (lambda img: cv2.cvtColor(img, cv2.COLOR_BGR2GRAY))
         self.scale = width / REF_WIDTH
         self.f = (width / 2) / math.tan(fov / 2)
         self.cv = (height - 1) / 2
@@ -149,7 +151,7 @@ class CornerDetector:
                     self._use(*self.conn.recv())
                     self.busy = False
                 if not self.busy:
-                    self.conn.send((s, cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)))   # grey: 3x less to copy
+                    self.conn.send((s, self.grey(image)))   # grey: 3x less to copy
                     self.busy = True
             except (EOFError, OSError) as e:
                 print(f"[CORNERS] detection process stopped ({e}): going on inside the FSM loop")
@@ -160,12 +162,12 @@ class CornerDetector:
                 if result is not None:
                     self.busy = False
                 if not self.busy:
-                    self.job, self.busy = (s, image), True
+                    self.job, self.busy = (s, self.grey(image)), True
                     self.cond.notify()
             if result is not None:
                 self._use(*result)
         else:
-            self._use(s, *_detect(image, self.scale))
+            self._use(s, *_detect(self.grey(image), self.scale))
         return self._announce(s) if announce else None
 
     def _ahead(self, centre):

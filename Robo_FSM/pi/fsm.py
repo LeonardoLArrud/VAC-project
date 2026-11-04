@@ -217,10 +217,11 @@ def main(hw, nav=Explorer):
     fsm = FSM(LineFollower(width, height, fov, TIME_STEP / 1000.0, hw.wheel_v_max()), nav)
     detector = None                     # MISSION = None (test of the 8): line and obstacles only
     if MISSION is not None:             # grid mission: the intersections (nodes) are needed
-        detector = NodeDetector(width, height, fov, fsm.follower.mask)
+        detector = NodeDetector(width, height, fov, fsm.follower.grey)   # one grey image per frame
         if NODES != "bars":             # corner detection v4 (corner_detector.py): "+" crossings
             from corner_detector import CornerDetector, NodeFusion
-            corners = CornerDetector(width, height, fov)
+            grey = fsm.follower.grey if fsm.follower.px_step == 1 else None
+            corners = CornerDetector(width, height, fov, grey=grey)
             detector = corners if NODES == "corners" else NodeFusion(detector, corners)
     else:
         print("[FSM] no MISSION (test of the 8): follows the line and stops for obstacles; "
@@ -243,7 +244,7 @@ def main(hw, nav=Explorer):
             v, w = fsm.step(t, image, hw.obstacle_distance(), hw.heading(), cmd, s, node)
             hw.set_wheels(v - K * w, v + K * w)
             if hasattr(hw, "show"):
-                hw.show(fsm.follower.points)
+                hw.show(fsm.follower.points, fsm.follower.cached_mask(image))
             log.writerow([f"{t:.3f}", fsm.state, f"{v:.4f}", f"{w:.4f}", f"{fsm.d:.3f}", fsm.line, f"{s:.3f}",
                           f"{node[0]:.3f} {''.join(sorted(node[1]))}" if node else ""])
     return fsm

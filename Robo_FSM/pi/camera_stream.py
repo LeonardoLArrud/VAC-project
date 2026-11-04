@@ -51,7 +51,7 @@ class CameraStream:
     """Keeps the latest frame and serves it. Call update(frame, points) from the main loop."""
 
     def __init__(self, width, height, fov, port=PORT):
-        self.frame, self.points = None, ()
+        self.frame, self.points, self.mask = None, (), None
         self.lock = threading.Condition()
         # rows where the follower looks for the line (same maths as LineFollower)
         self.follower = LineFollower(width, height, fov, 0.064, 1.0)
@@ -79,15 +79,17 @@ class CameraStream:
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         print(f"[camera] live view on http://<pi-ip>:{port}/")
 
-    def update(self, frame, points=()):
-        """points: (row, u, used) in follower pixels, as LineFollower.points."""
+    def update(self, frame, points=(), mask=None):
+        """points: (row, u, used) in follower pixels, as LineFollower.points. mask: the follower mask of frame
+        if the main loop has it (None: computed here, only while /mask is open)."""
         with self.lock:
-            self.frame, self.points = frame, list(points)
+            self.frame, self.points, self.mask = frame, list(points), mask
             self.lock.notify_all()
 
-    def _render(self, frame, points, mask):
+    def _render(self, frame, points, mask, frame_mask=None):
         if mask:
-            img = np.repeat((self.follower.mask(frame) * 255)[:, :, None], 3, axis=2)
+            m = self.follower.mask(frame) if frame_mask is None else frame_mask
+            img = np.repeat((m * 255)[:, :, None], 3, axis=2)
             scale = 1
         else:
             img = frame[:, :, :3].copy()
@@ -109,10 +111,10 @@ class CameraStream:
             while True:
                 with self.lock:
                     self.lock.wait(timeout=1.0)
-                    frame, points = self.frame, self.points
+                    frame, points, frame_mask = self.frame, self.points, self.mask
                 if frame is None:
                     continue
-                data = self._render(frame, points, mask)
+                data = self._render(frame, points, mask, frame_mask)
                 h.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
                               + str(len(data)).encode() + b"\r\n\r\n" + data + b"\r\n")
                 time.sleep(1.0 / FPS)

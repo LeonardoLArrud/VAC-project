@@ -18,6 +18,12 @@ WIDTH = 480
 OK, MEMORY, LOST = "OK", "MEMORY", "LOST"
 
 
+def to_grey(img, p, nv, nu):
+    """Mean of the 3 channels of every p-th pixel (nv x nu, uint8). cv2.transform: the numpy mean, much faster."""
+    roi = np.ascontiguousarray(img[: nv * p : p, : nu * p : p, :3])
+    return cv2.transform(roi, np.full((1, 3), 1 / 3, np.float32))
+
+
 @dataclass
 class FollowerOutput:
     status: str
@@ -51,21 +57,28 @@ class LineFollower:
         self.side = 1.0
         self.points = []  # (row, u, used) of the last image, in follower pixels: for the live view
         self.kernel = np.ones((OPEN_H, OPEN_W), np.uint8)
-        self._mask_img = self._mask = None  # last image and its mask: follower and node detector share one per frame
+        self._mask_img = self._mask = None   # last image and its mask (step() and find_target() share it)
+        self._grey_img = self._grey = None   # last image and its grey (shared with the node and corner detectors)
 
-    def _grey(self, img):
-        p = self.px_step
-        return img[::p, ::p, :3].mean(axis=2)[: self.nv, : self.nu]
+    def grey(self, img):
+        """to_grey() of img, computed once per image object."""
+        if img is not self._grey_img:
+            self._grey_img, self._grey = img, to_grey(img, self.px_step, self.nv, self.nu)
+        return self._grey
 
     def mask(self, img):
-        """1 where the follower sees the line (nv x nu, uint8). Computed once per image object."""
+        """1 where the follower sees the line (nv x nu, uint8), whole image. Computed once per image object."""
         if img is not self._mask_img:
             self._mask_img, self._mask = img, self._compute_mask(img)
         return self._mask
 
+    def cached_mask(self, img):
+        """mask() of img if it was already computed for it, else None: no extra work (live view)."""
+        return self._mask if img is self._mask_img else None
+
     def _compute_mask(self, img):
         """Blur, threshold, then an opening."""
-        g = self._grey(img).astype(np.uint8)
+        g = self.grey(img)
         if not FILTER:
             return (g > THRESHOLD).astype(np.uint8)
         g = cv2.blur(g, (BLUR, BLUR))

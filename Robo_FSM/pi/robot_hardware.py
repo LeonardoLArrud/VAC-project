@@ -121,12 +121,13 @@ class RobotHardware:
         self.frame = self.cam.capture_array()
         return self.frame
 
-    def show(self, points):
-        """Send the last image and the line points the follower found on it to the live view."""
+    def show(self, points, mask=None):
+        """Send the last image, the line points the follower found on it and its mask (None: the live view
+        computes it) to the live view."""
         if self.stream is None or self.frame is None:
             return
         try:
-            self.stream.update(self.frame, points)
+            self.stream.update(self.frame, points, mask)
         except Exception as e:  # noqa: BLE001
             print(f"live view off: {e}")
             self.stream = None

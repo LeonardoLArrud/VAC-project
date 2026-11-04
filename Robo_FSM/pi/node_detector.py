@@ -1,43 +1,67 @@
-"""Node detector: the bar of an intersection 0.40-0.65 m ahead. step(image, s) -> (d, exits) once per node."""
+"""Node detector: "+", T and L intersections 0.40-0.65 m ahead. step(image, s) -> (d, exits) once per node.
+
+Works on the floor, in metres, along the line itself (robust to the robot coming in at an angle):
+1. its own mask of the rows that see the floor: blur, then Otsu (adapts to the light), never below
+   the floor median + CONTRAST (no tape in view: no white)
+2. the line: centres of the narrow white runs, fitted with a straight line y = a + b x
+3. every STEP along the line, three strips across it: left (SIDE), right (-SIDE) and centre (+-AXIS)
+4. a bar = FULL of the left and/or right strip white, over a thickness within THICK: exits L and/or R;
+   exit S = the line goes on beyond the bar (BEYOND)
+A curve or a glare does not fill a straight strip 4-12 cm beside the line over 1-6 cm: not a bar.
+"""
 import math
 
+import cv2
 import numpy as np
 
-from line_follower import H_CAM, THRESHOLD, TILT, WIDTH, X_CAM
+from line_follower import H_CAM, TILT, WIDTH, X_CAM, to_grey
 
-ZONE = (0.40, 0.65)          # m ahead
-REACH, AXIS, LINE_W = 0.06, 0.04, 0.04   # m
-THICK = (0.01, 0.03)         # m, bar thickness
-BEYOND = (0.05, 0.15)        # m, where S is looked for
+ZONE = (0.40, 0.65)          # m ahead: where a bar is looked for; announced at ZONE[0]
+SIDE = (0.04, 0.12)          # m beside the line centre: strip where a bar is looked for
+FULL = 0.8                   # white fraction of that strip for a bar
+THICK = (0.012, 0.06)        # m, bar thickness accepted (tape 0.025 + blur)
+LINE_W = 0.045               # m, widest white run still taken as the line itself
+AXIS = 0.02                  # m, exit S: centre strip half width
+BEYOND = (0.05, 0.15)        # m beyond the bar where the line is looked for (exit S)
+CONTRAST = 30                # grey levels above the floor median for "white"
 N_FRAMES, S_TOL, SAME = 3, 0.03, 0.10
 MISS = 1                     # frames without the bar tolerated while confirming
-PERP_TOL = math.radians(15)
 try:  # Robo_FSM: params.ini [node_detector]; the Webots controller has no params.py
     from params import load
     load("node_detector", globals())
 except ImportError:
     pass
 
+STEP = 0.004                 # m between two cuts across the line
+NEAR = ZONE[0] - 0.12        # m, nearest floor used for the line fit
+FAR = ZONE[1] + BEYOND[1]    # m, farthest floor used
+
 
 class NodeDetector:
-    def __init__(self, width, height, fov, mask=None):
+    def __init__(self, width, height, fov, grey=None):
+        """grey: LineFollower.grey, so the image is turned grey once per frame for both."""
         self.p = max(1, width // WIDTH)
-        self.mask = mask or (lambda img: img[:: self.p, :: self.p, :3].mean(axis=2) > THRESHOLD)
-        nu, nv = width // self.p, height // self.p
-        f = (nu / 2) / math.tan(fov / 2)
-        q = (np.arange(nv) - (nv - 1) / 2) / f
-        a = np.arctan(q) + TILT
-        x = np.where(a > 0, X_CAM + H_CAM / np.tan(np.maximum(a, 1e-6)), np.inf)
-        self.rows = np.flatnonzero((x >= ZONE[0]) & (x <= ZONE[1]))[::-1]
-        self.x = x[self.rows]
-        self.m = (H_CAM / (f * (math.sin(TILT) + q * math.cos(TILT))))[self.rows]   # m per px
-        self.cu = (nu - 1) / 2
+        self.nu, nv = width // self.p, height // self.p
+        self.grey = grey or (lambda img: to_grey(img, self.p, nv, self.nu))
+        self.f = (self.nu / 2) / math.tan(fov / 2)
+        self.cu, self.cv = (self.nu - 1) / 2, (nv - 1) / 2
+        self.r0, self.r1 = (min(max(round(self._row(x)), 0), nv - 1) for x in (FAR, NEAR))
+        q = (np.arange(self.r0, self.r1 + 1) - self.cv) / self.f
+        self.x = X_CAM + H_CAM / np.tan(np.arctan(q) + TILT)     # m ahead, per ROI row
+        self.m = H_CAM / (self.f * (math.sin(TILT) + q * math.cos(TILT)))   # m per px across, per ROI row
+        self.xs = np.arange(ZONE[0], FAR + 1e-9, STEP)         # cuts across the line
+        self.o_side = np.linspace(SIDE[0], SIDE[1], 25)
+        self.o_axis = np.linspace(-AXIS, AXIS, 9)
         self.cand, self.last = None, -1.0         # [sum of s + d, frames, exits, misses]; last s_node
+
+    def _row(self, x):
+        """m ahead -> image row (follower pixels)."""
+        return self.cv + self.f * math.tan(math.atan2(H_CAM, x - X_CAM) - TILT)
 
     def step(self, image, s, announce=True):
         """announce=False: keeps tracking the bar but announces nothing (the FSM is not following the line:
         a node announced then would be lost, and taken as already seen afterwards)."""
-        bar, c = self._bar(self.mask(image)[self.rows] > 0), self.cand
+        bar, c = self.find(image), self.cand
         if bar and abs(s + bar[0] - self.last) > SAME:
             if c and abs(s + bar[0] - c[0] / c[1]) <= S_TOL:
                 c[0], c[1], c[2], c[3] = c[0] + s + bar[0], c[1] + 1, c[2] | bar[1], 0
@@ -55,47 +79,68 @@ class NodeDetector:
             return self.last - s, c[2]
         return None
 
-    def _bar(self, g):
-        yl, line, bar, n_s = None, [], [], 0
-        for i, row in enumerate(g):
-            e = np.flatnonzero(np.diff(np.r_[0, row.astype(np.int8), 0]))
-            ya, yb = -self.m[i] * (e[::2] - self.cu), -self.m[i] * (e[1::2] - 1 - self.cu)
-            if yl is None:
-                k = np.flatnonzero(ya - yb <= LINE_W)
-                k = k[np.argmin(np.abs(ya[k] + yb[k]))] if len(k) else None
-            else:                                 # run connected to the line
-                k = np.flatnonzero((ya >= yl - 0.01) & (yb <= yl + 0.01))
-                k = k[0] if len(k) else None
-            if k is None:
-                continue
-            narrow, centre = ya[k] - yb[k] <= LINE_W, (ya[k] + yb[k]) / 2
-            left, right = yl is not None and ya[k] - yl > REACH, yl is not None and yl - yb[k] > REACH
-            if (left or right) and (not bar or bar[-1][0] == i - 1):
-                bar.append((i, left, right))
-            elif bar:                             # beyond the bar: S?
-                d = (self.x[bar[0][0]] + self.x[bar[-1][0]]) / 2
-                n_s += narrow and abs(centre - yl) < AXIS and BEYOND[0] <= self.x[i] - d <= BEYOND[1]
-            elif narrow:
-                yl = centre
-                line.append((self.x[i], yl))
-        if not bar:
+    def white(self, image):
+        """Mask of the ROI rows (bool): blur + Otsu, at least CONTRAST above the floor median."""
+        g = cv2.blur(self.grey(image)[self.r0 : self.r1 + 1], (3, 3))
+        otsu = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[0]
+        return g > max(otsu, float(np.median(g)) + CONTRAST)
+
+    def _line(self, w):
+        """(a, b, x of its points) of the line y = a + b x (m), from the narrow white runs; None if not seen."""
+        pad = np.zeros((len(w), w.shape[1] + 2), np.int8)
+        pad[:, 1:-1] = w
+        rows, cols = np.nonzero(np.diff(pad, axis=1))     # run edges, row by row: start, end, start, end...
+        r, start, end = rows[::2], cols[::2], cols[1::2]
+        width = (end - start) * self.m[r]
+        ok = (width >= 0.01) & (width <= LINE_W)          # narrow runs: the line
+        r, y = r[ok], -self.m[r[ok]] * ((start[ok] + end[ok] - 1) / 2 - self.cu)
+        if len(r) < 4:
             return None
-        i0, i1 = bar[0][0], bar[-1][0]
-        x0, x1 = self.x[i0], self.x[i1]
-        xs, ys = np.array([p for p in line if p[0] > x0 - 0.10] or [(0.0, 0.0)]).T
-        if len(xs) < 3:
+        order = np.lexsort((np.abs(y), r))                # per row, the run nearest the robot axis first
+        first = order[np.r_[True, np.diff(r[order]) != 0]]
+        if len(first) < 4:
             return None
-        blk, xb = g[max(i0 - 2, 0) : i1 + 3], self.x[max(i0 - 2, 0) : i1 + 3]
-        y = -self.m[(i0 + i1) // 2] * (np.arange(g.shape[1]) - self.cu) - yl
-        cols = blk.any(axis=0) & (np.abs(y) >= 0.03) & (np.abs(y) <= 0.10)
-        if cols.sum() < 5:
+        x, y = self.x[r[first]], y[first]
+        b, a = np.polyfit(x, y, 1)
+        keep = np.abs(y - (a + b * x)) <= 0.02      # drop runs that are not the line
+        if keep.sum() < 4:
             return None
-        xc = (blk[:, cols] * xb[:, None]).sum(axis=0) / blk[:, cols].sum(axis=0)
-        top, low = np.where(blk[:, cols], xb[:, None], -np.inf).max(axis=0), np.where(blk[:, cols], xb[:, None], np.inf).min(axis=0)
-        if not THICK[0] <= np.median(top - low) + (self.x[min(i0 + 1, len(self.x) - 1)] - x0) <= THICK[1]:
-            return None                           # not a tape
-        if abs(math.atan(np.polyfit(xs, ys, 1)[0]) + math.atan(np.polyfit(y[cols], xc, 1)[0])) > PERP_TOL:
-            return None                           # not perpendicular: a curve
-        exits = {"L"} if any(b[1] for b in bar) else set()
-        exits |= ({"R"} if any(b[2] for b in bar) else set()) | ({"S"} if n_s >= 2 else set())
-        return (x0 + x1) / 2, exits
+        b, a = np.polyfit(x[keep], y[keep], 1)
+        return a, b, x[keep]
+
+    def _strip(self, w, a, b, offsets):
+        """White fraction of a strip across the line at each cut (offsets: m along the normal, + = left)."""
+        n = math.hypot(1.0, b)
+        x = self.xs[:, None] - b * offsets[None, :] / n
+        y = (a + b * self.xs)[:, None] + offsets[None, :] / n
+        q = np.tan(np.arctan2(H_CAM, x - X_CAM) - TILT)
+        v = np.round(self.cv + self.f * q).astype(int) - self.r0
+        u = np.round(self.cu - y * self.f * (math.sin(TILT) + q * math.cos(TILT)) / H_CAM).astype(int)
+        ok = (v >= 0) & (v < len(w)) & (u >= 0) & (u < self.nu)
+        hit = np.zeros(ok.shape, bool)
+        hit[ok] = w[v[ok], u[ok]]
+        n_ok = ok.sum(axis=1)
+        return np.where(n_ok >= 0.4 * len(offsets), hit.sum(axis=1) / np.maximum(n_ok, 1), 0.0)
+
+    def find(self, image):
+        """(d m ahead, exits) of the nearest bar in ZONE in this image, or None."""
+        w = self.white(image)
+        line = self._line(w)
+        if line is None:
+            return None
+        a, b, xl = line
+        left, right = self._strip(w, a, b, self.o_side), self._strip(w, a, b, -self.o_side)
+        side = (left >= FULL) | (right >= FULL)
+        k = np.flatnonzero(side & (self.xs <= ZONE[1]))
+        if not len(k):
+            return None
+        k = k[: np.argmax(np.r_[np.diff(k) > 2, True]) + 1]      # nearest bar: cuts until the first gap
+        thick = (k[-1] - k[0] + 1) * STEP
+        d = float(self.xs[k].mean())
+        if not THICK[0] <= thick <= THICK[1] or (xl < d - 0.03).sum() < 3:   # not a tape, or no line before it
+            return None
+        exits = {e for e, f in (("L", left), ("R", right)) if (f[k] >= FULL).mean() >= 0.5}
+        beyond = (self.xs >= d + BEYOND[0]) & (self.xs <= d + BEYOND[1]) & ~side
+        if ((self._strip(w, a, b, self.o_axis) >= 0.5) & beyond).sum() >= 3:
+            exits.add("S")
+        return d, exits

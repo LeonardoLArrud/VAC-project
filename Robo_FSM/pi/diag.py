@@ -32,7 +32,7 @@ from robot_hardware import (
 
 
 def draw(f, img):
-    g, m = f._grey(img), f.mask(img)
+    g, m = f.grey(img), f.mask(img)
     out = cv2.cvtColor(g.astype(np.uint8), cv2.COLOR_GRAY2BGR)
     for dj, row, mj, wj in f.bands:
         cv2.line(out, (0, row), (f.nu - 1, row), (0, 255, 0), 1)
@@ -244,7 +244,7 @@ def node_distances(cam, f, det, corners, frames=20):
     bars, cross = [], []
     for _ in range(frames):
         img = cam.capture_array()
-        bar = det._bar(f.mask(img)[det.rows] > 0)
+        bar = det.find(img)
         if bar:
             bars.append(bar[0])
         centre, _, _ = corner_detector._detect(img, corners.scale)
@@ -266,7 +266,7 @@ def nodecam(cam=None, frames=20):
     own = cam is None
     cam = cam or RobotHardware._open_camera()
     f = LineFollower(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, TIME_STEP / 1000.0, V_MAX)
-    det = NodeDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, f.mask)
+    det = NodeDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, f.grey)
     corners = CornerDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, parallel=None)
     print(f"Robot still on the line, a crossing ahead. Measure from the robot centre (midway between the front and rear "
           f"axles) to the middle of the crossing tape. Bars read {100 * ZONE[0]:.0f}-{100 * ZONE[1]:.0f} cm, corners "
@@ -329,12 +329,12 @@ def nodestop(hw=None):
 
 
 def node_detector(f):
-    """The node detector of the FSM (params.ini NODES): bars, corners or both. f: the LineFollower (its mask)."""
-    det = NodeDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, f.mask)
+    """The node detector of the FSM (params.ini NODES): bars, corners or both. f: the LineFollower (its grey)."""
+    det = NodeDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, f.grey)
     if NODES != "bars":
         from corner_detector import CornerDetector, NodeFusion
 
-        corners = CornerDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV)
+        corners = CornerDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, grey=f.grey if f.px_step == 1 else None)
         det = corners if NODES == "corners" else NodeFusion(det, corners)
     return det
 
