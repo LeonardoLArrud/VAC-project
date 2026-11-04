@@ -9,17 +9,23 @@ results/<name>_truth.csv (true pose and distance) and prints the verdict.
 import contextlib
 import csv
 import io
+import itertools
 import math
 import os
 import sys
+
+import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(1, os.path.join(HERE, ".."))   # fsm.py, fsm_basic.py, hardware.py, line_follower.py
 
 import fsm as ctrl  # noqa: E402
+
+ctrl.MISSION = None   # offline, a mission comes from the scenario keys, never from the Webots config
 from sim_hardware import SimHardware  # noqa: E402
-from world import Obstacle, World, arc, straight  # noqa: E402
+from navigators import OrderList  # noqa: E402
+from world import RES, Obstacle, World, arc, eight_track, grid_track, straight  # noqa: E402
 
 OUT = os.path.join(HERE, "results")
 os.makedirs(OUT, exist_ok=True)
@@ -32,10 +38,12 @@ def scenario(fn):
     return fn
 
 
-def run(w):
+def run(w, nav=None, detect=None):
     os.environ["FSM_LOG"] = os.path.join(OUT, f"{w.name}.csv")
-    with contextlib.redirect_stdout(io.StringIO()):
-        f = ctrl.main(SimHardware(w))
+    os.environ["FSM_VIEW"] = os.path.join(OUT, f"{w.name}_mission.json")
+    with contextlib.redirect_stdout(io.StringIO()) as printed:
+        f = ctrl.main(SimHardware(w), nav=nav or ctrl.NAV, detect=detect)
+    f.printed = printed.getvalue()
     with open(os.path.join(OUT, f"{w.name}_truth.csv"), "w", newline="") as fh:
         wr = csv.DictWriter(fh, fieldnames=list(w.log[0]))
         wr.writeheader()
@@ -198,6 +206,183 @@ def stop_beats_obstacle():
     idle_8_11 = all(r["state"] == "IDLE" for r in log if 8.0 <= float(r["t"]) < 11.0)
     ok = seq[-1] == "FOLLOW" and idle_8_11 and "WAIT" in seq and seq[seq.index("WAIT") + 1] == "IDLE"
     return ok, f"{' > '.join(seq)}; obstacle left at 8 s and the robot stayed IDLE until G at 11 s: {idle_8_11}"
+
+
+# ------------------------------------------------------------------ real node detector (PDF step 2)
+G = 0.50   # m between grid nodes
+
+
+def events(log):
+    """node_seen events of a run, from the log: (t, s, d, exits)."""
+    return [(float(r["t"]), float(r["s"]), float(r["node"].split()[0]), set(r["node"].split()[1]))
+            for r in log if r["node"]]
+
+
+def five_seeds(fn):
+    """Scenario that passes only if fn(seed) passes for the 5 noise seeds 0..4."""
+    def run_all():
+        res = [fn(seed) for seed in range(5)]
+        bad = [i for i, (ok, _) in enumerate(res) if not ok]
+        return not bad, f"5/5 seeds; seed 0: {res[0][1]}" if not bad else f"failed seeds {bad}; seed {bad[0]}: {res[bad[0]][1]}"
+    run_all.__name__ = fn.__name__
+    return scenario(run_all)
+
+
+def d_error(w, ev, nodes, axis):
+    """Largest |d - true distance to the node centre| over the events (axis 0: x, 1: y)."""
+    return max(abs(d - (n - truth_at(w, t)["xy"[axis]])) for (t, s, d, e), n in zip(ev, nodes))
+
+
+def reflections(w, seed, extra=(), n=600):
+    """Floor reflections: white spots of 4 and 8 mm, 1.5 to 6 cm from the lines, plus 8 mm ones at `extra`."""
+    rng = np.random.default_rng(seed)
+    pts = np.vstack(w.segments)
+    spots = [(*(pts[rng.integers(len(pts))] + rng.uniform(0.015, 0.06) * np.array([math.cos(a), math.sin(a)])),
+              rng.integers(1, 3)) for a in rng.uniform(0, 2 * math.pi, n)]
+    for x, y, k in spots + [(x, y, 2) for x, y in extra]:
+        i, j = int((y - w.y0) / RES), int((x - w.x0) / RES)
+        w.floor[i : i + k, j : j + k] = 230
+
+
+def row_east(name, seed, spots=False):
+    w = World(f"{name}_{seed}", grid_track(), pose0=(0.0, 2 * G, 0.0), seed=seed, t_end=30)
+    if spots:                                        # and 4 on the axis beyond the T at (4, 2), where an S would be
+        reflections(w, seed, extra=[(4 * G + 0.05 + 0.03 * k, 2 * G) for k in range(4)])
+    f, log = run(w)
+    ev = events(log)
+    ex = [e for *_, e in ev]
+    err = d_error(w, ev, [G, 2 * G, 3 * G, 4 * G], 0) if len(ev) == 4 else math.inf
+    ok = ex == [{"L", "S", "R"}] * 3 + [{"L", "R"}] and f.state == "IDLE" and "no single exit" in f.reason and err < 0.02
+    return ok, f"exits {[''.join(sorted(e)) for e in ex]}; d error {100 * err:.1f} cm; final {f.reason!r}"
+
+
+@five_seeds
+def grid_row(seed):
+    return row_east("grid_row", seed)
+
+
+@five_seeds
+def grid_reflections(seed):
+    return row_east("grid_reflections", seed, spots=True)
+
+
+@five_seeds
+def grid_column(seed):
+    w = World(f"grid_column_{seed}", grid_track(), pose0=(4 * G, 0.0, math.pi / 2), seed=seed, t_end=26)
+    f, log = run(w)
+    ev = events(log)[:4]
+    ex = [e for *_, e in ev]
+    err = d_error(w, ev, [G, 2 * G, 3 * G, 4 * G], 1) if len(ev) == 4 else math.inf
+    ok = ex == [{"L", "S"}] * 3 + [{"L"}] and err < 0.02
+    return ok, f"first exits {[''.join(sorted(e)) for e in ex]}; d error {100 * err:.1f} cm"
+
+
+def eight(seed, detect=None):
+    w = World(f"eight_laps_{seed}" if detect is None else "eight_laps_v1", eight_track(), pose0=(-0.45, -0.45, math.pi / 4),
+              seed=seed, t_end=260)
+    f, log = run(w, detect=detect)
+    return w, f, log, max(abs(r["error"]) for r in w.log if r["t"] > 3)
+
+
+EIGHT_V1 = []
+
+
+@five_seeds
+def eight_laps(seed):
+    if not EIGHT_V1:
+        EIGHT_V1.append(eight(0, lambda r: None)[3])
+    w, f, log, e = eight(seed)
+    ev = [x for x in events(log) if x[0] < w.t_end - 5]   # an event comes ~4 s before its crossing
+    near = [math.hypot(r["x"], r["y"]) < 0.05 for r in w.log]
+    passes = sum(b and not a for a, b in itertools.pairwise(near))
+    states = {r["state"] for r in log if float(r["t"]) > 1.1}
+    ok = (passes >= 6 and len(ev) == passes and all(x == {"L", "S", "R"} for *_, x in ev)
+          and states == {"FOLLOW", "NODE"} and e <= EIGHT_V1[0] + 0.005)
+    return ok, (f"{passes} crossings, {len(ev)} events {sorted({''.join(sorted(x)) for *_, x in ev})}; states {sorted(states)}; "
+                f"max error {100 * e:.1f} cm (v1 {100 * EIGHT_V1[0]:.1f} cm)")
+
+
+@five_seeds
+def order_list_cell_real(seed):
+    cs = [(0.5, 0.0), (0.5, 0.5), (0.0, 0.5), (0.0, 0.0)]
+    w = World(f"order_list_cell_real_{seed}", [straight(cs[i - 1], cs[i]) for i in range(4)], pose0=(0.05, 0.0, 0.0),
+              seed=seed, t_end=45)
+    f, log = run(w, nav=lambda: OrderList(["LEFT"] * 4))
+    seq, ev, end = sequence(f), events(log), w.log[-1]
+    err, turned = math.hypot(end["x"] - 0.5, end["y"]), math.degrees(end["psi"])
+    ok = (seq == ["IDLE", "FOLLOW"] + ["NODE", "TURN", "FOLLOW"] * 4 + ["NODE", "IDLE"] and err < 0.03
+          and abs(turned - 360) < 10 and [e for *_, e in ev] == [{"L"}] * 5)
+    return ok, f"{len(ev)} events {sorted({''.join(sorted(x)) for *_, x in ev})}; {100 * err:.1f} cm from the first node; heading {turned:+.0f} deg"
+
+
+@five_seeds
+def loose_tape(seed):
+    track = LINE + [straight((1.5, 0.035), (1.5, 0.085)), straight((2.5, -0.04), (2.55, -0.04))]
+    w = World(f"loose_tape_{seed}", track, seed=seed, t_end=25, reference=LINE)
+    f, log = run(w)
+    ev = events(log)
+    ok = sequence(f) == ["IDLE", "FOLLOW"] and not ev
+    return ok, f"{' > '.join(sequence(f))}; {len(ev)} events; tape pieces across and along the line"
+
+
+@five_seeds
+def mission_grid(seed):
+    """MISSION((0, 0), E, (4, 3)) on the 5x5 grid with the real detector: 7 edges, stop on (4, 3)."""
+    w = World(f"mission_grid_{seed}", grid_track(), seed=seed, t_end=70, keys=[(0.5, ("MISSION", (0, 0), "E", (4, 3)))])
+    f, log = run(w)
+    edges = sum(old == "FOLLOW" and new == "NODE" for _, old, new, _ in f.history)
+    err = math.hypot(w.x - 4 * G, w.y - 3 * G)
+    ok = f.state == "IDLE" and "arrived" in f.reason and edges == 7 and err < 0.03
+    turns = [why.split(": ")[-1] for _, old, new, why in f.history if new == "TURN"]
+    return ok, f"{edges} edges, turns {turns}; final {f.reason!r}; {100 * err:.1f} cm from (4, 3)"
+
+
+def mission(name, seed, segments=None, obstacles=(), heading="E"):
+    w = World(f"{name}_{seed}", segments or grid_track(), obstacles, seed=seed, t_end=110,
+              keys=[(0.5, ("MISSION", (0, 0), heading, (4, 3)))])
+    f, log = run(w)
+    err = math.hypot(w.x - 4 * G, w.y - 3 * G)
+    edges = sum(old == "FOLLOW" and new == "NODE" for _, old, new, _ in f.history)
+    return w, f, f.printed, err, edges
+
+
+@five_seeds
+def mission_blocked(seed):
+    """Box in the middle of edge (2, 3)-(3, 3): WAIT, U-turn, replan around it, arrive."""
+    w, f, out, err, edges = mission("mission_blocked", seed, obstacles=[Obstacle(centre=(2.5 * G, 3 * G))])
+    blocked = [why for _, _, new, why in f.history if new == "TURN" and "blocked" in why]
+    d_min = min(r["d_true"] for r in w.log)
+    ok = "arrived" in f.reason and len(blocked) == 1 and "(2, 3)-(3, 3)" in blocked[0] and err < 0.03 and d_min > 0.15
+    return ok, f"{blocked}; final {f.reason!r}; {100 * err:.1f} cm from (4, 3); closest to the box {d_min:.2f} m"
+
+
+@five_seeds
+def mission_missed_node(seed):
+    """The bar of (0, 2) is missing: node missed, counted and logged; the mission still arrives."""
+    segs = grid_track()
+    segs[2] = straight((0.12, 2 * G), (4 * G, 2 * G))   # row j = 2 starts 12 cm east of (0, 2)
+    w, f, out, err, edges = mission("mission_missed_node", seed, segs)
+    ok = "arrived" in f.reason and edges == 6 and "node (0, 2) missed" in out and err < 0.03
+    return ok, f"{edges} nodes seen; missed logged: {'node (0, 2) missed' in out}; final {f.reason!r}; {100 * err:.1f} cm"
+
+
+@five_seeds
+def mission_wrong_heading(seed):
+    """MISSION says N but the robot faces E: the exits seen do not fit the map, pose lost."""
+    w, f, out, err, edges = mission("mission_wrong_heading", seed, heading="N")
+    ok = f.state == "IDLE" and "pose lost" in f.reason and edges == 1
+    return ok, f"final {f.reason!r} after {edges} node"
+
+
+@five_seeds
+def mission_missing_edge(seed):
+    """No tape between (2, 3) and (3, 3): STRAIGHT is not among the exits seen, the edge leaves the map, replan."""
+    segs = grid_track()
+    segs[3:4] = [straight((0, 3 * G), (2 * G, 3 * G)), straight((3 * G, 3 * G), (4 * G, 3 * G))]
+    w, f, out, err, edges = mission("mission_missing_edge", seed, segs)
+    at = [why for _, _, new, why in f.history if new == "NODE" and "at (2, 3)" in why]
+    ok = "arrived" in f.reason and err < 0.03 and len(at) == 1 and "exits LR" in at[0] and "STRAIGHT" not in at[0]
+    return ok, f"at (2, 3): {at}; final {f.reason!r}; {100 * err:.1f} cm from (4, 3)"
 
 
 if __name__ == "__main__":

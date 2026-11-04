@@ -37,6 +37,19 @@ def arc(centre, radius, a0, a1, step=0.005):
     return np.c_[centre[0] + radius * np.cos(a), centre[1] + radius * np.sin(a)]
 
 
+def grid_track(n=5, g=0.50):
+    """Segments of an n x n grid with g between nodes; node (i, j) is at (i g, j g)."""
+    return ([straight((0, j * g), ((n - 1) * g, j * g)) for j in range(n)]
+            + [straight((i * g, 0), (i * g, (n - 1) * g)) for i in range(n)])
+
+
+def eight_track(r=0.8):
+    """A figure 8: two circles of radius r joined by two diagonals that cross at 90 deg at the origin."""
+    c, t = r * math.sqrt(2), r / math.sqrt(2)
+    return [straight((-t, -t), (t, t)), straight((-t, t), (t, -t)),
+            arc((c, 0), r, -3 * math.pi / 4, 3 * math.pi / 4), arc((-c, 0), r, math.pi / 4, 7 * math.pi / 4)]
+
+
 class Obstacle:
     """Circle. Appears at t_on and disappears at t_off. If 'ahead' is given, it is
     placed at that distance in front of the robot (along its heading) at t_on."""
