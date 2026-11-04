@@ -6,6 +6,7 @@ from graph.maneuver import (
     RIGHT,
     STRAIGHT,
     U_TURN,
+    first_maneuver,
     maneuver,
     maneuvers,
 )
@@ -70,6 +71,31 @@ class TestManeuverAfterTurningAround(unittest.TestCase):
         # heading left, going up = turning RIGHT (it would be LEFT before turning around)
         self.assertEqual(
             maneuver(nav.graph, nav.previous, nav.current, nav.next_node()), RIGHT
+        )
+
+
+class TestFirstManeuver(unittest.TestCase):
+    def test_grid_all_directions(self):
+        g = grid(5)  # car at (1,1) pointing right, to (1,2)
+        self.assertEqual(first_maneuver(g, (1, 1), (1, 2), (1, 2)), STRAIGHT)
+        self.assertEqual(first_maneuver(g, (1, 1), (1, 2), (0, 1)), LEFT)
+        self.assertEqual(first_maneuver(g, (1, 1), (1, 2), (2, 1)), RIGHT)
+        self.assertEqual(first_maneuver(g, (1, 1), (1, 2), (1, 0)), U_TURN)
+
+    def test_eight_start_on_the_crossing(self):
+        g = figure_eight(3)  # on C2, pointing at R0 (the straight line L2-C2-R0)
+        self.assertEqual(first_maneuver(g, "C2", "R0", "R0"), STRAIGHT)
+        self.assertEqual(first_maneuver(g, "C2", "R0", "L2"), U_TURN)
+
+    def test_without_positions_raises(self):
+        g = from_edges([("A", "O", 1), ("B", "O", 1)])
+        with self.assertRaises(ValueError):
+            first_maneuver(g, "O", "A", "B")
+
+    def test_with_navigator(self):
+        nav = Navigator(grid(5), (1, 1), (1, 0), facing=(1, 2))  # goal behind the car
+        self.assertEqual(
+            first_maneuver(nav.graph, nav.current, nav.facing, nav.next_node()), U_TURN
         )
 
 

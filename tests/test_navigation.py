@@ -70,6 +70,23 @@ class TestNavigator(unittest.TestCase):
         self.assertEqual(nav.next_node(), (1, 0))  # then goes around
 
 
+class TestFacing(unittest.TestCase):
+    def test_cruise_starts_the_way_the_car_points(self):
+        nav = Navigator(grid(5), (1, 1), facing=(2, 1))  # no goal, pointing down
+        self.assertEqual(nav.next_node(), (2, 1))
+        nav.advance()
+        self.assertEqual(nav.next_node(), (3, 1))  # then straight on
+
+    def test_without_facing_unchanged(self):
+        nav = Navigator(grid(5), (1, 1))
+        self.assertIsNone(nav.facing)
+        self.assertEqual(nav.next_node(), (0, 1))  # first free neighbor, as before
+
+    def test_goal_still_third_argument(self):
+        nav = Navigator(grid(5), (1, 1), (1, 3))
+        self.assertEqual(nav.goal, (1, 3))
+
+
 class TestStart(unittest.TestCase):
     def test_start_stays_while_the_car_moves(self):
         nav = Navigator(grid(5), (1, 1), (1, 3))
