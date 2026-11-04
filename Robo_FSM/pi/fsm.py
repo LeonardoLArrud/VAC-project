@@ -1,4 +1,4 @@
-"""FSM of the ST5 robot (IDLE, FOLLOW, NODE, WAIT, SEARCH, TURN) and its main loop. Writes fsm_log.csv."""
+"""FSM of the ST5 robot (IDLE, FOLLOW, NODE, ALIGN, WAIT, SEARCH, TURN) and its main loop. Writes fsm_log.csv."""
 import csv
 import math
 import os
@@ -14,11 +14,12 @@ MISSION = NAV_ON_ARDUINO = AUTO_START = TIME_STEP = None
 D_STOP = D_SLOW = SLOW_FRACTION = T_STATIC = T_MIN = N_OK = None
 SEARCH_RATE = TURN_RATE = TURN_EARLY = TURN_LATE = TURN_TOL_Y = None
 V_NODE = K_HOLD = D_STRAIGHT = PRIOR_TOL = NODES = None
+D_BRAKE = V_CREEP = NODE_TOL = T_SETTLE = None
 load("fsm", globals())
 D_SEE = ZONE[0]                     # nodes are announced at the start of the detector zone
 TURNS = {"LEFT": math.pi / 2, "RIGHT": -math.pi / 2, "U_TURN": math.pi}
 
-IDLE, FOLLOW, NODE, WAIT, SEARCH, TURN = "IDLE", "FOLLOW", "NODE", "WAIT", "SEARCH", "TURN"
+IDLE, FOLLOW, NODE, ALIGN, WAIT, SEARCH, TURN = "IDLE", "FOLLOW", "NODE", "ALIGN", "WAIT", "SEARCH", "TURN"
 
 
 class FSM:
@@ -32,8 +33,10 @@ class FSM:
         self.n_ok, self.saved, self.turn_goal, self.y_prev = 0, FOLLOW, math.pi, None
         self.s_node = self.psi_ref = 0.0
         self.order, self.why, self.node_event = "STOP", "", None
+        self.ds, self.t_still, self.t_stop, self.fix, self.fixed, self.t_fix_end = 0.0, 0.0, 0.0, 0, False, 0.0   # ALIGN
 
     def step(self, t, image, dist, heading, cmd, s=0.0, node=None):
+        self.ds = s - self.s                # distance moved since the last cycle (ALIGN: are the wheels still?)
         self.t, self.heading, self.s, self.node_event = t, heading, s, node
         self.dists.append(dist)
         self.d = sorted(self.dists)[len(self.dists) // 2]
@@ -101,15 +104,43 @@ class FSM:
         return out.v, out.w
 
     def node(self, image, cmd):
+        """To the node centre, keeping the heading. Turns: slower over the last D_BRAKE, then ALIGN (stop) at the centre."""
         if self.order == "STRAIGHT" and self.s >= self.s_node - D_STRAIGHT:
             self.go(FOLLOW, "bar passed")
         elif self.order != "STRAIGHT" and self.s >= self.s_node:
             if self.order in TURNS:
-                self.start_turn(TURNS[self.order], f"at the node centre: {self.order}")
+                self.fix, self.fixed, self.t_still, self.t_stop = 0, False, self.t, self.t
+                self.go(ALIGN, f"at the node centre: stop before {self.order}")
             else:
                 self.go(IDLE, f"{self.order} at the node: {self.why}")
         else:
-            return min(V_NODE, self.v_max()), K_HOLD * (self.psi_ref - self.heading)
+            v = V_NODE
+            if self.order != "STRAIGHT":    # arrive slowly, so it stops on the centre
+                v = V_CREEP + (V_NODE - V_CREEP) * min(1.0, (self.s_node - self.s) / D_BRAKE)
+            return min(v, self.v_max()), K_HOLD * (self.psi_ref - self.heading)
+        return 0.0, 0.0
+
+    def align(self, image, cmd):
+        """Stopped at the node centre before a turn: turn once the wheels are still for T_SETTLE, so it spins in
+        place on the node. Stopped farther than NODE_TOL from the centre: one slow move forward or back first."""
+        off = self.s - self.s_node                 # > 0: past the centre
+        hold = K_HOLD * (self.psi_ref - self.heading)
+        if self.fix:                               # slow move back to the centre, then stop again
+            if off * self.fix >= 0.0 or self.t >= self.t_fix_end:
+                self.fix, self.t_still, self.t_stop = 0, self.t, self.t
+                return 0.0, 0.0
+            return self.fix * V_CREEP, hold
+        if abs(self.ds) > V_CREEP * TIME_STEP / 2000:    # still rolling (slower than V_CREEP / 2 = still)
+            self.t_still = self.t
+        if self.t - self.t_still < T_SETTLE and self.t - self.t_stop < 3 * T_SETTLE:   # (noisy odometry: at most 3x)
+            return 0.0, 0.0
+        if abs(off) > NODE_TOL and not self.fixed:
+            self.fix, self.fixed = (1 if off < 0 else -1), True
+            self.t_fix_end = self.t + 2 * abs(off) / V_CREEP + 1.0
+            print(f"[FSM] t={self.t:6.2f}s stopped {100 * off:+.1f} cm from the node centre: "
+                  f"moving {'forward' if off < 0 else 'back'}")
+            return 0.0, 0.0
+        self.start_turn(TURNS[self.order], f"stopped {100 * off:+.1f} cm from the node centre: {self.order}")
         return 0.0, 0.0
 
     def wait(self, image, cmd):
