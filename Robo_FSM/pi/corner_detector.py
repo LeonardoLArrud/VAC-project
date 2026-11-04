@@ -170,6 +170,10 @@ class CornerDetector:
             self._use(s, *_detect(self.grey(image), self.scale))
         return self._announce(s) if announce else None
 
+    def forget(self):
+        """Drop the crossing being confirmed (the robot spun in place)."""
+        self.cand = None
+
     def _ahead(self, centre):
         """Image row of the crossing centre -> m ahead of the robot centre (as NodeDetector.x)."""
         a = math.atan((centre[1] - self.cv) / self.f) + TILT
@@ -212,6 +216,10 @@ class NodeFusion:
 
     def __init__(self, *detectors):
         self.detectors, self.last = detectors, -1.0
+
+    def forget(self):
+        for det in self.detectors:
+            det.forget()
 
     def step(self, image, s, announce=True):
         node = None

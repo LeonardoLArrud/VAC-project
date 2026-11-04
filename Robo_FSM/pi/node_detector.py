@@ -23,6 +23,7 @@ THICK = (0.012, 0.06)        # m, bar thickness accepted (tape 0.025 + blur)
 LINE_W = 0.045               # m, widest white run still taken as the line itself
 AXIS = 0.02                  # m, exit S: centre strip half width
 BEYOND = (0.05, 0.15)        # m beyond the bar where the line is looked for (exit S)
+MAX_ANGLE = math.radians(20) # the line must be this close to the robot axis: none while spinning or askew
 CONTRAST = 30                # grey levels above the floor median for "white"
 N_FRAMES, S_TOL, SAME = 3, 0.03, 0.10
 MISS = 1                     # frames without the bar tolerated while confirming
@@ -80,6 +81,10 @@ class NodeDetector:
             return self.last - s, c[2]
         return None
 
+    def forget(self):
+        """Drop the node being confirmed (the robot spun in place: its position no longer holds)."""
+        self.cand = None
+
     def white(self, image):
         """Mask of the ROI rows (bool): blur + Otsu, at least CONTRAST above the floor median."""
         g = cv2.blur(self.grey(image)[self.r0 : self.r1 + 1], (3, 3))
@@ -134,6 +139,9 @@ class NodeDetector:
         if line is None:
             return None
         a, b, xl = line
+        if abs(math.atan(b)) > MAX_ANGLE:          # spinning (s does not move: anything would confirm) or askew
+            self.why = f"line at {math.degrees(math.atan(b)):+.0f} deg: robot not along the line (max {math.degrees(MAX_ANGLE):.0f})"
+            return None
         left, right = self._strip(w, a, b, self.o_side), self._strip(w, a, b, -self.o_side)
         side = (left >= FULL) | (right >= FULL)
         k = np.flatnonzero(side & (self.xs <= ZONE[1]))

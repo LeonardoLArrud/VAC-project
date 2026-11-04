@@ -20,6 +20,7 @@ D_SEE = ZONE[0]                     # nodes are announced at the start of the de
 TURNS = {"LEFT": math.pi / 2, "RIGHT": -math.pi / 2, "U_TURN": math.pi}
 
 IDLE, FOLLOW, NODE, ALIGN, WAIT, SEARCH, TURN = "IDLE", "FOLLOW", "NODE", "ALIGN", "WAIT", "SEARCH", "TURN"
+SPINNING = (TURN, SEARCH)           # spinning in place: s does not move, so anything seen would confirm as a node
 
 
 class FSM:
@@ -208,6 +209,15 @@ class FSM:
         self.go(new, reason)
 
 
+def look_for_node(detector, fsm, image, s):
+    """detector.step(), except while the robot spins in place (the node being confirmed is dropped then);
+    a node is announced only in FOLLOW."""
+    if fsm.state in SPINNING:
+        detector.forget()
+        return None
+    return detector.step(image, s, fsm.state == FOLLOW)
+
+
 def main(hw, nav=Explorer):
     global Mission
     if NAV_ON_ARDUINO:                  # the grid mission runs on the Arduino; FSM.idle() creates it as before
@@ -237,7 +247,7 @@ def main(hw, nav=Explorer):
             image, s = hw.camera_image(), hw.distance()
             node = None                 # nodes are only used (announced) in FOLLOW, and only with a MISSION
             if detector is not None:
-                node = detector.step(image, s, fsm.state == FOLLOW)
+                node = look_for_node(detector, fsm, image, s)
             if node:
                 print(f"[NODE] t={t:6.2f}s s={s:.3f} d={node[0]:.3f} exits={sorted(node[1])}")
             fsm.follower.points = []

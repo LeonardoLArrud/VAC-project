@@ -22,7 +22,7 @@ import cv2
 import numpy as np
 import serial
 
-from fsm import D_STOP, FOLLOW, FSM, IDLE, NODES, TIME_STEP
+from fsm import D_STOP, FSM, IDLE, NODES, TIME_STEP, look_for_node
 from line_follower import H_CAM, K, LOST, THRESHOLD, TILT, X_CAM, LineFollower
 from navigators import SIDE, Navigator, OrderList
 from node_detector import ZONE, NodeDetector
@@ -399,7 +399,7 @@ def gridrecord(seconds=None):
         try:
             while hw.step() and hw.time() < seconds:
                 t, image, s = hw.time(), hw.camera_image(), hw.distance()
-                node = det.step(image, s, fsm.state == FOLLOW)
+                node = look_for_node(det, fsm, image, s)
                 if node:
                     print(f"[NODE] t={t:6.2f}s s={s:.3f} d={node[0]:.3f} exits={sorted(node[1])}")
                 f.points = []
@@ -433,7 +433,7 @@ def nodestop(hw=None):
         periods.append(time.monotonic() - t0)
         t0 = time.monotonic()
         image, s = hw.camera_image(), hw.distance()
-        node = det.step(image, s, fsm.state == FOLLOW)
+        node = look_for_node(det, fsm, image, s)
         if node:
             print(f"  node announced {100 * node[0]:.1f} cm ahead, exits {''.join(sorted(node[1]))}")
         v, w = fsm.step(hw.time(), image, hw.obstacle_distance(), hw.heading(), cmd, s, node)
