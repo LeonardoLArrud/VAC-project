@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from collections import deque
 from dataclasses import dataclass
 
 import cv2
@@ -31,6 +32,7 @@ class FollowerOutput:
     v: float
     w: float
     side: float
+    c: float = 0.0   # curvature to the target, median of 3 frames (1/m, + = left): for the speed and the sonar
 
 
 class LineFollower:
@@ -52,6 +54,7 @@ class LineFollower:
                 self.bands.append((dj, row, H_CAM / (f * den), H_CAM * math.tan(fov / 2) / den))
         self.side_px = {row: max(3, round(0.025 / mj)) for dj, row, mj, wj in self.bands}   # a tape width, px
         self.u_prev = [self.cu] * len(self.bands)
+        self.c_recent = deque(maxlen=3)   # |c| of the last frames: the speed uses their median
         self.memory = None
         self.L_lost = BANDS[-1]
         self.travelled = 0.0
@@ -143,6 +146,7 @@ class LineFollower:
         """Forget the line position and the memory (after a U-turn the old ones are wrong)."""
         self.u_prev = [self.cu] * len(self.bands)
         self.memory, self.travelled = None, 0.0
+        self.c_recent.clear()
 
     def _propagate(self, v, w):
         dt = self.dt
@@ -183,7 +187,9 @@ class LineFollower:
         L, Y = target
         self.side = 1.0 if Y >= 0 else -1.0
         c = GAIN * 2 * Y / (L * L + Y * Y)
-        v_target = min(V0, v_max, 0.163 * L / TAU_EFF, math.sqrt(A_LAT / max(abs(c), 1e-6)),
+        self.c_recent.append(abs(c))
+        c_speed = sorted(self.c_recent)[len(self.c_recent) // 2]   # median of 3 frames: one noisy frame does not brake
+        v_target = min(V0, v_max, 0.163 * L / TAU_EFF, math.sqrt(A_LAT / max(c_speed, 1e-6)),
                        self.wheel_v_max / (1 + K * abs(c)))
         v = max(0.0, min(max(v_target, v_prev - A_DOWN * self.dt), v_prev + A_UP * self.dt))
-        return FollowerOutput(status, target, v, v * c, self.side)
+        return FollowerOutput(status, target, v, v * c, self.side, math.copysign(c_speed, c))
