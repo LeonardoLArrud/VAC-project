@@ -1,5 +1,6 @@
 """Checks on the real robot (Arduino with robo_fsm.ino).
 python3 diag.py [all] | camera | live | wheels | encoders | pi | speed | turn | sonar | odometry | camcal | nodecam | nodestop | nodegap | nodewhy | gridrecord [seconds] | loop [seconds]
+python3 diag.py full [first step]: EVERY check below in one guided run, one zip at the end (see full())
 Distance to a node = odometry s + camera d. Calibrate them in this order:
   odometry  follows a straight line for 1 m by the encoders, you measure it: WHEEL_R
   camcal    robot still, a crossing at 3 distances you measure: H_CAM, TILT_deg, X_CAM (tape edges + widths in the image)
@@ -7,27 +8,37 @@ Distance to a node = odometry s + camera d. Calibrate them in this order:
   nodestop  the whole chain: follows the line and stops on a node centre (as before a turn), you measure the error
   nodegap   follows a grid line through several nodes: the spacing between nodes (last number of MISSION)
 nodewhy: robot still before a node: what the bars and corners detectors see, and why they give no node
-gridrecord: free walk on the grid recording every camera image + log (recordings/), to tune the detectors offline
+gridrecord: free walk on the grid (random free exit at each node) recording every camera image + log (recordings/),
+  to tune the detectors offline
 sonar: sweeps the sonar servo right to left, distance at each angle: SONAR_SIGN
 loop: robot still, motors off: ms of each part of the FSM loop and the load of each CPU core (does it fit TIME_STEP?)
 """
+import ast
+import builtins
+import configparser
 import csv
 import json
 import math
 import os
 import queue
 import random
+import re
+import shutil
+import subprocess
 import sys
 import threading
 import time
+import traceback
+from collections import Counter
+from itertools import pairwise
 
 import cv2
 import numpy as np
 import serial
 
-from fsm import D_STOP, FSM, IDLE, NODES, STAGES, TIME_STEP, LoopTimer, look_for_node
-from line_follower import BANDS, H_CAM, K, LOST, THRESHOLD, TILT, V0, X_CAM, LineFollower
-from navigators import SIDE, Navigator, OrderList
+from fsm import D_SCAN, D_STOP, FSM, IDLE, MISSION, NODES, STAGES, TIME_STEP, TURN_TOL_Y, LoopTimer, look_for_node
+from line_follower import BANDS, GAIN, H_CAM, K, LOST, THRESHOLD, TILT, V0, X_CAM, LineFollower
+from navigators import SIDE, Explorer, Navigator, OrderList
 from node_detector import ZONE, NodeDetector
 from params import PATH as PARAMS_PATH
 from robot_hardware import (
@@ -40,6 +51,7 @@ from robot_hardware import (
     V_MAX,
     WHEEL_R,
     SONAR_MAX,
+    SONAR_SIGN,
     RobotHardware,
     sonar_degrees,
 )
@@ -189,9 +201,11 @@ def turn():
 
 def sonar():
     """Sonar on its servo, robot still: distance every 10 deg from right to left. A + angle must point to the LEFT
-    of the robot (else SONAR_SIGN = -1). In FOLLOW the servo turns the sonar into the curves."""
+    of the robot (else SONAR_SIGN = -1). In FOLLOW the servo turns the sonar into the curves.
+    Returns [(deg, cm or None)] (None: no echo or no data)."""
     ser = open_serial()
     top = round(math.degrees(SONAR_MAX))
+    sweep = []
     for deg in range(-top, top + 1, 10):
         ser.write(f"A{sonar_degrees(math.radians(deg))}\n".encode())
         time.sleep(0.6)                 # servo move + a few echoes
@@ -199,7 +213,10 @@ def sonar():
         side = "left" if deg > 0 else "right" if deg < 0 else "ahead"
         print(f"{deg:+4d} deg ({side}): " + ("no data from the Arduino" if st is None else
               {-1: "no echo", -2: "no signal"}.get(st[0], f"{st[0]} cm")))
+        sweep.append((deg, st[0] if st is not None and st[0] >= 0 else None))
     ser.write(b"A0\n")
+    ser.close()
+    return sweep
 
 
 def loop_report(periods):
@@ -245,7 +262,7 @@ def odometry(hw=None, metres=1.0):
     """Odometry scale: s (and so where the robot thinks a node is) must be true metres. Corrects WHEEL_R."""
     if not USE_ENCODERS:
         print("USE_ENCODERS = False: the distance comes from the commanded speed; calibrate V_MAX with diag.py speed")
-        return
+        return None
     hw = hw or RobotHardware(TIME_STEP)
     f = LineFollower(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, TIME_STEP / 1000.0, V_MAX)
     ratios = []
@@ -264,6 +281,7 @@ def odometry(hw=None, metres=1.0):
     r = float(np.mean(ratios))
     print(f"params.ini [robot_hardware]: WHEEL_R = {WHEEL_R * r:.4f}   (now {WHEEL_R}, x{r:.4f} from {len(ratios)} run(s))")
     print("  so that the wheel speeds match too, put the same value in robo_fsm.ino (const float WHEEL_R) and upload it")
+    return {"WHEEL_R": WHEEL_R * r, "ratios": ratios}
 
 
 def node_distances(cam, f, det, corners, frames=20):
@@ -444,9 +462,10 @@ def cal_fit(data, f, cv, start, h_tape=None, iterations=50):
     return p, math.sqrt(cost / len(cal_residuals(p, data, f, cv, h_tape)))
 
 
-def camcal(cam=None, frames=10):
+def camcal(cam=None, frames=10, save=False):
     """Camera geometry: robot still facing a crossing at 2-4 distances you measure; fits H_CAM, TILT_deg and X_CAM
-    to the tape edges and widths in the image, no detector in between (cal_* above)."""
+    to the tape edges and widths in the image, no detector in between (cal_* above).
+    save: one image per distance, camcal_<cm>cm.jpg in the current folder (to fit again offline)."""
     own = cam is None
     cam = cam or RobotHardware._open_camera()
     f = LineFollower(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, TIME_STEP / 1000.0, V_MAX)
@@ -471,9 +490,12 @@ def camcal(cam=None, frames=10):
                 print("  type a number")
                 continue
             got, errors = [], []
-            for _ in range(frames):
+            for k in range(frames):
+                img = cam.capture_array()
+                if save and k == 0:
+                    cv2.imwrite(f"camcal_{100 * d:.1f}cm.jpg", img)
                 try:
-                    got.append(cal_measure(f.grey(cam.capture_array()), fx))
+                    got.append(cal_measure(f.grey(img), fx))
                 except ValueError as e:
                     errors.append(str(e))
             if len(got) < frames // 2:
@@ -493,7 +515,7 @@ def camcal(cam=None, frames=10):
             cam.stop()
     if len(data) < 2:
         print("at least 2 distances are needed (3 are better)")
-        return
+        return None
     p, rms = cal_fit(data, fx, cv, now, h_tape)
     print("distance   read now   read with the fit   line width now -> fit")
     for d, m in data:
@@ -504,8 +526,22 @@ def camcal(cam=None, frames=10):
     if rms > 2:
         print("  residual above 2 px: a distance mistyped or measured from another point? Measure again")
     rows = [cal_row_of(b, *now, fx, cv) for b in BANDS]
-    print(f"  BANDS that keep the follower on the same image rows (same steering): "
-          f"{[round(float(cal_ahead_of(r, *p, fx, cv)), 3) for r in rows]} (now {BANDS})")
+    bands = [round(float(cal_ahead_of(r, *p, fx, cv)), 3) for r in rows]
+    gain = GAIN * cal_curvature(now, rows[-1], fx, cv) / cal_curvature(p, rows[-1], fx, cv)
+    print(f"  BANDS that keep the follower on the same image rows: {bands} (now {BANDS})")
+    print(f"  GAIN that keeps the same steering with the new geometry: {gain:.2f} (now {GAIN})")
+    return {"H_CAM": float(p[0]), "TILT_deg": math.degrees(p[1]), "X_CAM": float(p[2]), "BANDS": bands,
+            "GAIN": gain, "rms_px": float(rms), "distances": [d for d, _ in data]}
+
+
+def cal_curvature(prm, row, f, cv, du=40.0):
+    """Pure pursuit curvature (1/m) the follower computes for a line du px beside the image centre on this row,
+    with the camera geometry prm = (H_CAM, TILT, X_CAM) (line_follower.py: same rows, other metres)."""
+    h, tilt, _ = prm
+    q = (row - cv) / f
+    ahead = float(cal_ahead_of(row, *prm, f, cv))
+    side = h / (f * (math.sin(tilt) + q * math.cos(tilt))) * du
+    return 2 * side / (ahead * ahead + side * side)
 
 
 MAX_ERR = 0.10      # nodecam: a reading this far from the measured distance is another crossing, not this one
@@ -591,13 +627,34 @@ def nodewhy(period=0.5):
 
 
 class Wanderer(Navigator):
-    """Free walk on the grid (gridrecord): at a node a random exit (straight counts twice); blocked: U-turn."""
+    """Free walk on the grid (gridrecord): at a node one exit drawn at random among the ones the camera saw.
+    After a turn the robot stops and the sonar reads the exit (FSM state CHECK): blocked, that exit is dropped and
+    another one is drawn among the rest; none left, back where it came from (U-turn). Blocked on a line: U-turn.
+    The exit is checked after the turn, when the sonar faces it straight."""
+
+    def __init__(self):
+        self.options, self.backing = [], False
 
     def on_node(self, exits, s_node=0.0):
+        self.backing = False
         if not exits:
+            self.options = []
             return "STRAIGHT", "wander: exits unknown"
-        options = [SIDE[e] for e in sorted(exits)] + (["STRAIGHT"] if "S" in exits else [])
-        return random.choice(options), f"wander: exits {''.join(sorted(exits))}"
+        self.options = [SIDE[e] for e in sorted(exits)]
+        return self._draw(f"exits {''.join(sorted(exits))}")
+
+    def _draw(self, why):
+        order = random.choice(self.options)
+        self.options.remove(order)
+        return order, f"wander: {why}, drew {order}"
+
+    def on_exit_blocked(self, exits):
+        if self.options:
+            return self._draw(f"exit blocked, {len(self.options)} left")
+        if not self.backing:
+            self.backing = True
+            return "U_TURN", "wander: every exit blocked, back where it came from"
+        return "STOP", "wander: blocked on every side, the way back too"
 
     def on_blocked(self, s, d):
         return "U_TURN", "wander: blocked"
@@ -641,41 +698,64 @@ def gridrecord(seconds=None):
     folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings", time.strftime("%Y%m%d-%H%M%S"))
     hw = RobotHardware(TIME_STEP)
     f = LineFollower(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, TIME_STEP / 1000.0, hw.wheel_v_max())
-    det = NodeDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, f.grey)
-    fsm = FSM(f, nav=Wanderer)
-    rec = Recorder(folder)
+    print(f"recording to {folder} for {seconds:.0f} s (Ctrl+C stops). Robot on a grid line: it starts now.")
+    record_drive(hw, folder, seconds, FSM(f, nav=Wanderer), "START", node_detector(f))
+    close_detectors()
+
+
+def record_drive(hw, folder, seconds, fsm, cmd, det, restart=True):
+    """Drives with the FSM for `seconds` (Ctrl+C stops), recording every camera image (frames/) and one log row per
+    cycle (log.csv, read by replay_filters.py), plus meta.json. cmd: the first command ("START" or a MISSION tuple).
+    det: node detector, None = no node searched (the 8). restart: back to START when the FSM stops (IDLE), else
+    the drive ends there (a mission: arrived or gave up). Returns the LoopTimer of the drive."""
+    f, bars = fsm.follower, bars_of(det)
+    rec, timer = Recorder(folder), LoopTimer()
     with open(PARAMS_PATH) as src, open(os.path.join(folder, "meta.json"), "w") as out:
         json.dump({"camera": [CAM_WIDTH, CAM_HEIGHT, CAM_FOV], "time_step_ms": TIME_STEP, "seconds": seconds,
-                   "params_ini": src.read()}, out, indent=1)
-    print(f"recording to {folder} for {seconds:.0f} s (Ctrl+C stops). Robot on a grid line: it starts now.")
-    cmd, reason = "START", ""
+                   "command": cmd, "params_ini": src.read()}, out, indent=1)
+    reason, t0 = "", hw.time()
+    n_d0, t_d0 = getattr(hw, "n_d", None), time.monotonic()
     with open(os.path.join(folder, "log.csv"), "w", newline="", buffering=1) as fl:
         log = csv.writer(fl)
         log.writerow(["t", "image", "state", "v", "w", "s", "heading", "dist", "line", "node", "bars_shape",
-                      "bars_why", "fsm_reason"])
+                      "bars_why", "fsm_reason", "period_ms", "busy_ms"] + [f"{k}_ms" for k in STAGES])
         try:
-            while hw.step() and hw.time() < seconds:
-                t, image, s = hw.time(), hw.camera_image(), hw.distance()
-                node = look_for_node(det, fsm, image, s)
+            while hw.step() and hw.time() - t0 < seconds:
+                timer.start()
+                t, image, s = hw.time() - t0, hw.camera_image(), hw.distance()
+                timer.lap("capture")
+                node = look_for_node(det, fsm, image, s) if det is not None else None
                 if node:
                     print(f"[NODE] t={t:6.2f}s s={s:.3f} d={node[0]:.3f} exits={sorted(node[1])}")
+                timer.lap("nodes")
                 f.points = []
                 v, w = fsm.step(t, image, hw.obstacle_distance(), hw.heading(), cmd, s, node)
+                timer.lap("fsm")
+                if fsm.state == IDLE and fsm.history and not restart:
+                    break
                 cmd = "START" if fsm.state == IDLE else None      # never stays stopped: back to following
                 hw.set_wheels(v - K * w, v + K * w)
+                hw.aim_sonar(fsm.aim)            # as fsm.main(): into the curves, ahead in CHECK
+                timer.lap("io")
                 hw.show(f.points, f.cached_mask(image))
-                log.writerow([f"{t:.3f}", rec.image(image), fsm.state, f"{v:.4f}", f"{w:.4f}", f"{s:.4f}",
+                name = rec.image(image)
+                timer.lap("view")
+                log.writerow([f"{t:.3f}", name, fsm.state, f"{v:.4f}", f"{w:.4f}", f"{s:.4f}",
                               f"{hw.heading():.4f}", f"{fsm.d:.3f}", fsm.line,
                               f"{node[0]:.3f} {''.join(sorted(node[1]))}" if node else "",
-                              det.shape, det.why, fsm.reason if fsm.reason != reason else ""])
+                              bars.shape if bars else "", bars.why if bars else "",
+                              fsm.reason if fsm.reason != reason else ""] + timer.row())
                 reason = fsm.reason
         except KeyboardInterrupt:
-            pass
+            print("  stopped (Ctrl+C)")
         finally:
             hw.set_wheels(0.0, 0.0)
             rec.close()
+    timer.report()
+    serial_rate(hw, n_d0, t_d0)
     print(f"{rec.n} images saved, {rec.dropped} dropped (writer behind) in {folder}\n"
           f"copy it to the Mac: tar czf rec.tgz -C {os.path.dirname(folder)} {os.path.basename(folder)}")
+    return timer
 
 
 def nodestop(hw=None):
@@ -702,12 +782,13 @@ def nodestop(hw=None):
     loop_report(periods)
     if not fsm.reason.startswith("STOP at the node"):
         print(f"  did not stop at a node: {fsm.reason}")
-        return
+        return None
     est = hw.distance() - fsm.s_node
     real = ask_number(f"  odometry: robot centre {100 * est:+.1f} cm from the node centre. Measured with a tape "
                       f"(cm, + = past the centre, - = before it): ") / 100
     print(f"  node position error: {100 * (est - real):+.1f} cm (> 0: the robot thinks it is further than it is)")
     print("  with WHEEL_R calibrated (odometry), this is the camera distance: correct TILT_deg with nodecam")
+    return est - real
 
 
 def node_detector(f):
@@ -718,7 +799,39 @@ def node_detector(f):
 
         corners = CornerDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, grey=f.grey if f.px_step == 1 else None)
         det = corners if NODES == "corners" else NodeFusion(det, corners)
+    _detectors.append(det)
     return det
+
+
+_detectors = []     # made by node_detector() and not closed yet
+
+
+def close_detectors():
+    """Stop the corner detection process of every detector node_detector() made (diag.py full, after each step:
+    otherwise each step would leave one process running)."""
+    while _detectors:
+        det = _detectors.pop()
+        if hasattr(det, "close"):
+            det.close()
+
+
+def bars_of(det):
+    """The NodeDetector (bars) inside det, for its shape and why, or None (NODES = "corners")."""
+    if isinstance(det, NodeDetector):
+        return det
+    return next((d for d in getattr(det, "detectors", ()) if isinstance(d, NodeDetector)), None)
+
+
+def serial_rate(hw, n0, t0):
+    """D lines per second read from the Arduino since (n0, t0); it sends 20. The Pi reads every line waiting at each
+    cycle, so a slow loop does not lower it (its lines are only older: see the loop period). Fewer: lines lost or
+    garbled on the link, or the Arduino rebooting (power)."""
+    if n0 is None or not hasattr(hw, "n_d"):
+        return None
+    rate = (hw.n_d - n0) / max(time.monotonic() - t0, 1e-6)
+    print(f"[SERIAL] {rate:.1f} D lines/s from the Arduino (it sends 20)"
+          + ("" if rate >= 18 else ": lines lost or garbled, or the Arduino rebooted (cable, power?)"))
+    return rate
 
 
 def cpu_times():
@@ -728,18 +841,21 @@ def cpu_times():
     return [(sum(map(int, r[1:])) - int(r[4]) - int(r[5]), sum(map(int, r[1:]))) for r in rows]
 
 
-def loop(seconds=None):
+def loop(seconds=None, hw=None, ask=True):
     """Cost of each part of the FSM loop on the Pi (python3 diag.py loop 20): robot still on a line before a
     crossing, motors off. The same stages as fsm.main(): capture, node detectors (params.ini NODES, even with
     MISSION = None), line follower ("fsm"), serial ("io"), live view (LIVE_VIEW). Then the load of each CPU core:
     the corner detector runs in its own process, so its cost shows there, not in the stages."""
     seconds = seconds or (float(sys.argv[2]) if len(sys.argv) > 2 else 20.0)
-    hw = RobotHardware(TIME_STEP)
+    hw = hw or RobotHardware(TIME_STEP)
     f = LineFollower(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, TIME_STEP / 1000.0, V_MAX)
     det = node_detector(f)
     timer = LoopTimer()
-    input(f"Robot still on a line, a crossing 25-35 cm ahead; the motors stay off. Enter -> measures for {seconds:.0f} s")
+    if ask:
+        input(f"Robot still on a line, a crossing 25-35 cm ahead; the motors stay off. Enter -> measures for "
+              f"{seconds:.0f} s")
     cpu0, t_end = cpu_times(), time.monotonic() + seconds
+    n_d0, t_d0 = getattr(hw, "n_d", None), time.monotonic()
     try:
         while hw.step() and time.monotonic() < t_end:
             timer.start()
@@ -758,6 +874,7 @@ def loop(seconds=None):
     except KeyboardInterrupt:
         print("  stopped")
     timer.report()
+    serial_rate(hw, n_d0, t_d0)
     load = [100 * (b1 - b0) / max(t1 - t0, 1) for (b0, t0), (b1, t1) in zip(cpu0, cpu_times())]
     print("[CPU]  " + ", ".join(f"core {i} {p:.0f}%" for i, p in enumerate(load)))
     if timer.cycles:
@@ -806,13 +923,14 @@ def nodegap(hw=None, nodes=4, v=0.15, max_metres=6.0):
     gaps = np.diff(found)
     if len(gaps) == 0:
         print(f"  {len(found)} node(s) seen: at least 2 are needed (check the mask on the live view, /mask)")
-        return
+        return None
     g = float(np.median(gaps))
     print(f"spacing: median {100 * g:.1f} cm, from {100 * gaps.min():.1f} to {100 * gaps.max():.1f} cm "
           f"({len(gaps)} gap(s))")
     print(f"MISSION (params.ini / params_entrega.ini): the last number = {g:.2f}   (m between nodes)")
     if gaps.max() - gaps.min() > 0.10:
         print("  the gaps differ by more than 10 cm: a node was missed or seen twice; look at the list and run again")
+    return {"spacing": g, "gaps": [float(x) for x in gaps], "consistent": bool(gaps.max() - gaps.min() <= 0.10)}
 
 
 NAMES = ("FR", "FL", "RR", "RL")
@@ -852,6 +970,7 @@ def everything():
     cam = RobotHardware._open_camera()
     img = cam.capture_array()
     cam.stop()
+    cam.close()                         # diag.py full opens the camera again in the next steps
     f = LineFollower(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, 0.064, V_MAX)
     g, m, out = draw(f, img)
     cv2.imwrite("diag.png", out)
@@ -895,18 +1014,669 @@ def everything():
             v = 2 * math.pi * (c2[i] - c1[i]) / COUNTS_PER_REV * WHEEL_R / (t2 - t1)
             check(f"{NAMES[i]} PI", abs(v - 0.10) < 0.02, f"{v:+.3f} m/s (target +0.100)")
     ser.close()
-    summary(results)
+    return summary(results)
 
 
 def summary(results):
+    """Prints the checks that failed; returns results: [(name, ok, detail)]."""
     bad = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(bad)}/{len(results)} OK")
     for name, _, detail in bad:
         print(f"  FAIL {name}: {detail}")
+    return results
+
+
+# ---------------------------------------------------------------- full: every check in one guided run
+# python3 diag.py full [first step]: guides the steps below in order, records everything in ~/diag_sessions/<date>/
+# (console.txt, images, drive logs, a copy of the code and params, summary.json), writes the params the measures
+# give (params_proposed.ini, params_entrega_proposed.ini, params_changes.txt) and ends with one zip on the Desktop.
+# The guide for the person at the robot: local/testes_robo_pi.html on the Mac.
+
+SESSIONS = os.path.expanduser("~/diag_sessions")     # outside Robo_FSM/: replacing that folder keeps the sessions
+CODE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # Robo_FSM/
+DEFAULT_MISSION = ("MISSION", (0, 0), "E", (4, 3), 5, 0.975)
+ENTREGA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "params_entrega.ini")
+HEADINGS = {"E": "east", "N": "north", "W": "west", "S": "south"}
+THROTTLED = {0: "UNDER-VOLTAGE NOW", 1: "CPU frequency capped now", 2: "CPU throttled now", 3: "temperature limit now",
+             16: "under-voltage happened since boot", 17: "frequency capping happened since boot",
+             18: "throttling happened since boot", 19: "temperature limit happened since boot"}
+SHAPES = [("plus", "a + crossing"),
+          ("t_stem", "a T arriving on its stem (the bar goes left and right, nothing straight on)"),
+          ("t_side", "a T arriving on one of its arms (the line goes on straight, one exit to a side)"),
+          ("l", "an L corner (the line turns to one side, nothing straight on)")]
+
+
+class ConsoleCopy:
+    """Copies everything written to the terminal (fd 1 and 2: prints, libcamera and OpenCV messages, the corner
+    detection process) into a file as well, so nothing has to be copied from the terminal by hand."""
+
+    def __init__(self, path):
+        self.file = open(path, "ab", buffering=0)  # noqa: SIM115  open for the whole session, closed by close()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        self.saved = (os.dup(1), os.dup(2))
+        self.read_end, write_end = os.pipe()
+        os.dup2(write_end, 1)
+        os.dup2(write_end, 2)
+        os.close(write_end)
+        self.thread = threading.Thread(target=self._copy, daemon=True)
+        self.thread.start()
+
+    def _copy(self):
+        while chunk := os.read(self.read_end, 4096):
+            os.write(self.saved[0], chunk)
+            self.file.write(chunk)
+
+    def note(self, text):
+        """Text the terminal shows but does not send through fd 1 (what the person types)."""
+        self.file.write(text.encode())
+
+    def close(self):
+        """Back to the terminal only; the copy thread ends when no process writes to the pipe any more."""
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.dup2(self.saved[0], 1)
+        os.dup2(self.saved[1], 2)
+        self.thread.join(timeout=2.0)
+        self.file.close()
+
+
+def logged_input(console):
+    """input() that also writes the answer to the console file (the terminal echoes it, the file would not get it)."""
+
+    def ask(prompt=""):
+        sys.stdout.write(str(prompt))
+        sys.stdout.flush()
+        line = sys.stdin.readline()
+        if not line:
+            raise EOFError("no input: run diag.py full in a terminal")
+        console.note(line if line.endswith("\n") else line + "\n")
+        return line.rstrip("\n")
+
+    return ask
+
+
+def shell(cmd, timeout=15):
+    """Output of a shell command, or why it failed."""
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout, check=False)
+        return (r.stdout + r.stderr).strip() or f"(no output, exit {r.returncode})"
+    except Exception as e:  # noqa: BLE001  any failure is only reported: the diagnosis goes on
+        return f"(failed: {e})"
+
+
+def version_of(package):
+    try:
+        from importlib.metadata import version
+
+        return version(package)
+    except Exception:  # noqa: BLE001
+        return "not found"
+
+
+def pi_state():
+    """Power, temperature and memory of the Pi now, with warnings in plain words (start and end of a session)."""
+    state = {"throttled": shell("vcgencmd get_throttled"), "temperature": shell("vcgencmd measure_temp"),
+             "memory": shell("free -m")}
+    warnings = []
+    m = re.search(r"0x([0-9a-fA-F]+)", state["throttled"])
+    if m:
+        bits = int(m.group(1), 16)
+        warnings += [text for bit, text in THROTTLED.items() if bits >> bit & 1]
+    if any("under-voltage" in w.lower() for w in warnings):
+        warnings.append("under-voltage: weak battery or power cable; motors, camera and Pi can misbehave. Charge it")
+    state["warnings"] = warnings
+    return state
+
+
+def ini_value(path, section, key):
+    """One value of an ini file written like params.ini (a Python literal), read without loading the file."""
+    ini = configparser.ConfigParser(inline_comment_prefixes=("#",), interpolation=None)
+    ini.optionxform = str
+    if not ini.read(path):
+        raise FileNotFoundError(f"parameters file not found: {path}")
+    return ast.literal_eval(ini.get(section, key))
+
+
+def spin_crossings(hw, f, direction, rate=0.5, turn=2 * math.pi):
+    """Spins in place (direction +1 = left) by `turn` plus a margin; returns the encoder headings (rad from the start)
+    where the line crossed the image centre. On a long straight line it crosses every half turn."""
+    h0, y_prev, found = hw.heading(), None, []
+    t_end = time.monotonic() + 2 * (turn + 0.5) / rate + 5.0      # wheels stalled: give up
+    while hw.step() and time.monotonic() < t_end:
+        turned = abs(hw.heading() - h0)
+        if turned > turn + 0.5:
+            break
+        target = f.find_target(hw.camera_image())
+        y = target[1] if target else None
+        near = y is not None and abs(y) <= 2 * TURN_TOL_Y
+        if near and y_prev is not None and y * y_prev < 0 and turned > 0.5:
+            found.append(turned)
+        y_prev = y if near else None
+        hw.set_wheels(-K * direction * rate, K * direction * rate)
+    settle(hw)
+    return found
+
+
+class FullDiag:
+    """One guided session: the steps, the shared RobotHardware, the results of each step."""
+
+    def __init__(self, folder):
+        self.folder, self.name = folder, os.path.basename(folder)
+        self.hw, self.hw_error = None, None
+        self.results, self.steps = {}, []
+
+    def hardware(self):
+        """The RobotHardware shared by the steps (camera + Arduino), made once."""
+        if self.hw is None:
+            if self.hw_error:
+                raise RuntimeError(f"the robot hardware did not start before: {self.hw_error}")
+            print("starting the camera and the Arduino...")
+            try:
+                self.hw = RobotHardware(TIME_STEP)
+            except Exception as e:
+                self.hw_error = str(e)
+                raise
+        return self.hw
+
+    def follower(self):
+        return LineFollower(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, TIME_STEP / 1000.0, self.hardware().wheel_v_max())
+
+    # ---- the steps: each returns what goes into summary.json (and feeds params_proposed.ini)
+
+    def system(self):
+        """Pi state, the camera seen by libcamera, versions, and a copy of the code and params that ran."""
+        info = {
+            "model": shell("tr -d '\\0' < /proc/device-tree/model"),
+            "os": shell("grep PRETTY_NAME /etc/os-release"),
+            "kernel": shell("uname -a"),
+            **pi_state(),
+            "disk": shell(f"df -h {SESSIONS}"),
+            "serial ports": shell("ls -l /dev/ttyACM* /dev/ttyUSB* 2>&1"),
+            "cameras": shell("rpicam-hello --list-cameras 2>&1 || libcamera-hello --list-cameras 2>&1", 30),
+            "python": sys.version.split()[0],
+            "opencv": cv2.__version__,
+            "numpy": np.__version__,
+            "picamera2": version_of("picamera2"),
+            "pyserial": version_of("pyserial"),
+            "params file": PARAMS_PATH,
+        }
+        free = shutil.disk_usage(SESSIONS).free / 1e9
+        if free < 1.0:
+            info["warnings"].append(f"only {free:.1f} GB free on the SD card: the drives record ~300 MB of images")
+        for key, value in info.items():
+            if key != "warnings":
+                print(f"{key}: {value}")
+        for w in info["warnings"]:
+            print(f"WARNING: {w}")
+        shutil.copytree(CODE_DIR, "code", ignore=shutil.ignore_patterns(
+            "recordings", "__pycache__", "*.jpg", "*.png", "*.csv", "*.zip", "*.tgz", "*.mp4"))
+        shutil.copy(PARAMS_PATH, "params_used.ini")
+        print("code copied to code/ and the params in use to params_used.ini")
+        return info
+
+    def check(self):
+        results = everything()
+        return {"checks": results, "failed": [r[0] for r in results if not r[1]]}
+
+    def sonar_sweep(self):
+        sweep = sonar()
+        near = [(cm, deg) for deg, cm in sweep if cm is not None and deg != 0]
+        if not near:
+            print("no echo at any side angle: was the box there?")
+            return {"sweep": sweep, "box_at_deg": None}
+        cm, deg = min(near)
+        print(f"nearest echo {cm} cm at {deg:+d} deg: " + ("left, SONAR_SIGN is right" if deg > 0 else
+              "RIGHT: SONAR_SIGN must flip (params_proposed.ini)"))
+        return {"sweep": sweep, "box_at_deg": deg, "box_cm": cm}
+
+    def sonar_distance(self, readings=40):
+        """Sonar straight ahead: nothing in front (false echoes?), then a box at distances you measure. The FSM stops
+        at D_STOP and checks exits at D_SCAN on these raw readings."""
+        hw = self.hardware()
+        hw.aim_sonar(0.0)
+        out = []
+        for true_cm in (None, 25, 50):
+            if true_cm is None:
+                input("Nothing in front of the sonar for 1.5 m. Enter -> 40 readings")
+            else:
+                while True:
+                    answer = input(f"Box straight ahead, about {true_cm} cm from the FRONT OF THE SONAR. Measured "
+                                   f"distance (cm; Enter = skip): ").strip().replace(",", ".")
+                    try:
+                        true_cm = float(answer) if answer else None
+                        break
+                    except ValueError:
+                        print("  type a number")
+                if true_cm is None:
+                    continue
+            got = []
+            for _ in range(readings):
+                hw.step()
+                got.append(hw.obstacle_distance())
+            valid = [100 * d for d in got if 0 < d < math.inf]
+            res = {"true_cm": true_cm, "valid": len(valid), "of": readings, "no_echo": sum(d == math.inf for d in got)}
+            if valid:
+                res.update(median_cm=float(np.median(valid)), min_cm=min(valid), max_cm=max(valid))
+            if true_cm is None:
+                res["false_echoes"] = sum(v < 100 for v in valid)
+                print(f"  nothing ahead: {res['false_echoes']} reading(s) under 1 m out of {readings} (should be 0)")
+            elif valid:
+                print(f"  median {res['median_cm']:.1f} cm (error {res['median_cm'] - true_cm:+.1f}), from "
+                      f"{res['min_cm']:.0f} to {res['max_cm']:.0f}, {len(valid)}/{readings} valid")
+            else:
+                print(f"  no valid reading in {readings}: is the box in the sonar beam?")
+            out.append(res)
+        return out
+
+    def odometry_scale(self):
+        return odometry(self.hardware())
+
+    def turn_scale(self, rate=0.5):
+        """K (effective half track: it turns the wheel counts into an angle) from spins in place on a long straight
+        line. The camera sees the line cross its centre every half turn; between two crossings the robot turned
+        exactly 180 deg, whatever the camera delay, and the encoders say how much they counted for it."""
+        if not USE_ENCODERS:
+            print("USE_ENCODERS = False: the heading comes from the commanded speed, not the wheels; K not measured")
+            return None
+        hw, f = self.hardware(), self.follower()
+        ratios = []
+        for direction, name in ((1, "left"), (-1, "right")):
+            input(f"Robot centred and square on the line again. Enter -> spins about 1.1 turns to the {name}")
+            seen = spin_crossings(hw, f, direction, rate)
+            gaps = [b - a for a, b in pairwise(seen) if abs(b - a - math.pi) < 0.6]
+            print(f"  line crossings at {[round(math.degrees(c)) for c in seen]} deg by the encoders"
+                  + (f": {[round(math.degrees(g)) for g in gaps]} deg counted for each true 180" if gaps else ""))
+            ratios += [g / math.pi for g in gaps]
+        if not ratios:
+            print("  no two crossings half a turn apart: was there line ahead AND behind the robot?")
+            return None
+        r = float(np.median(ratios))
+        print(f"params.ini [line_follower]: K = {K * r:.3f}   (now {K}, x{r:.3f} from {len(ratios)} half turn(s))")
+        return {"K": K * r, "ratios": ratios, "WHEEL_R_used": WHEEL_R}
+
+    def camera_geometry(self):
+        return camcal(self.hardware().cam, save=True)
+
+    def shapes(self, frames=15):
+        """Each node shape at a measured distance, robot still: what the bars and the corners read over `frames`
+        images. shape_<name>.jpg = the camera, shape_<name>_topview.png = top view | what the bars take as tape."""
+        import corner_detector
+        from corner_detector import CornerDetector
+
+        hw = self.hardware()
+        f = LineFollower(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, TIME_STEP / 1000.0, V_MAX)
+        det = NodeDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, f.grey)
+        corners = CornerDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, parallel=None)
+        out, rows = {}, []
+        for key, text in SHAPES:
+            while True:
+                answer = input(f"\nRobot still and square on the line, {text}, 25-35 cm ahead.\n"
+                               f"  Distance robot centre -> middle of the crossing tape (cm; Enter = skip this shape): ")
+                answer = answer.strip().replace(",", ".")
+                try:
+                    true_d = float(answer) / 100 if answer else None
+                    break
+                except ValueError:
+                    print("  type a number")
+            if true_d is None:
+                continue
+            bars_d, names, corner_d = [], [], []
+            for k in range(frames):
+                img = hw.camera_image()
+                found = det.find(img)
+                centre, n, _ = corner_detector._detect(f.grey(img), corners.scale)
+                cd = corners._ahead(centre) if centre else None
+                if k == 0:
+                    cv2.imwrite(f"shape_{key}.jpg", img)
+                    top, tape = det.white(img)
+                    cv2.imwrite(f"shape_{key}_topview.png", np.hstack([top, tape.astype(np.uint8) * 255]))
+                if found:
+                    bars_d.append(found[0])
+                names.append(det.shape or "-")
+                if cd:
+                    corner_d.append(cd)
+                rows.append([key, f"{true_d:.3f}", k, f"{found[0]:.3f}" if found else "", det.shape, det.why, n,
+                             f"{cd:.3f}" if cd else ""])
+            shape, count = Counter(names).most_common(1)[0]
+            res = {"measured": true_d, "bars_seen": len(bars_d), "shape": shape, "shape_count": count,
+                   "corners_seen": len(corner_d)}
+            line = f"  bars: '{shape}' in {count}/{frames} images"
+            if bars_d:
+                res["bars_d"] = float(np.median(bars_d))
+                line += f", crossing at {100 * res['bars_d']:.1f} cm (error {100 * (res['bars_d'] - true_d):+.1f})"
+            else:
+                line += f", no crossing: {det.why}"
+            print(line)
+            line = f"  corners: '+' in {len(corner_d)}/{frames} images"
+            if corner_d:
+                res["corners_d"] = float(np.median(corner_d))
+                line += f", at {100 * res['corners_d']:.1f} cm (error {100 * (res['corners_d'] - true_d):+.1f})"
+            print(line + ("" if key == "plus" else " (corners only see a +: none here is right)"))
+            out[key] = res
+        with open("shapes.csv", "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["shape", "measured_m", "frame", "bars_d_m", "bars_shape", "bars_why", "corners_n", "corners_d_m"])
+            w.writerows(rows)
+        return out
+
+    def stops(self):
+        errors = []
+        while True:
+            err = nodestop(self.hardware())
+            close_detectors()
+            if err is not None:
+                errors.append(err)
+            print(f"  errors so far (cm): {[round(100 * e, 1) for e in errors]}")
+            if len(errors) >= 3 or input("Again from another start? [Y/n] ").strip().lower() not in ("", "y", "yes"):
+                return {"errors_m": errors}
+
+    def gap(self):
+        return nodegap(self.hardware())
+
+    def loop_cost(self):
+        hw = self.hardware()
+        print("1/2 with the live view: open http://<pi-ip>:8000/mask on the Mac while it measures")
+        loop(20, hw)
+        close_detectors()
+        stream, hw.stream = hw.stream, None
+        try:
+            print("\n2/2 without the live view (same position)")
+            loop(20, hw, ask=False)
+        finally:
+            hw.stream = stream
+        return {"done": True}
+
+    def drive(self, folder, seconds, nav, cmd, nodes, restart=True):
+        hw, f = self.hardware(), self.follower()
+        print("it starts now (Ctrl+C stops it early)")
+        fsm = FSM(f, nav=nav) if nav else FSM(f)
+        timer = record_drive(hw, folder, seconds, fsm, cmd, node_detector(f) if nodes else None, restart)
+        states = Counter(new for _, _, new, _ in fsm.history)
+        note = input("\nWhat did you see? A short note: it left the track, hit something, stopped off a node...\n"
+                     "  (Enter = all as expected): ").strip()
+        with open(os.path.join(folder, "notes.txt"), "w") as fh:
+            fh.write((note or "all as expected") + "\n")
+        return {"cycles": len(timer.cycles), "transitions": len(fsm.history), "entered": dict(states),
+                "last_reason": fsm.reason, "note": note or "all as expected"}
+
+    def eight(self):
+        return self.drive("drive_8", 60, Explorer, "START", nodes=False)
+
+    def uturn(self):
+        return self.drive("drive_uturn", 40, Explorer, "START", nodes=False)
+
+    def wander(self):
+        return self.drive("drive_grid", 120, Wanderer, "START", nodes=True)
+
+    def mission(self):
+        return self.drive("drive_mission", 180, None, MISSION or DEFAULT_MISSION, nodes=True, restart=False)
+
+    def delivery(self):
+        return self.drive("drive_delivery", 180, None, ini_value(ENTREGA, "fsm", "MISSION"), nodes=True,
+                          restart=False)
+
+    # ---- the session
+
+    def save(self):
+        with open("summary.json", "w") as fh:
+            json.dump({"session": self.name, "params": PARAMS_PATH, "steps": self.steps, "results": self.results},
+                      fh, indent=1, default=str)
+
+    def run(self, n, step):
+        """One step: instructions, Enter / s / q, run it, record how it went. False: the person chose to finish."""
+        key, title, text, method = step
+        print(f"\n{'=' * 78}\nSTEP {n}/{len(FULL_STEPS)}: {title}\n{'=' * 78}\n{text}")
+        if key != "system":
+            while (answer := input("Enter = start   s = skip   q = finish now (makes the zip): ").strip().lower()) \
+                    not in ("", "s", "q"):
+                pass
+            if answer == "q":
+                return False
+            if answer == "s":
+                self.steps.append({"n": n, "step": key, "status": "skipped"})
+                self.save()
+                return True
+        t0, status = time.monotonic(), "done"
+        try:
+            self.results[key] = getattr(self, method)()
+        except KeyboardInterrupt:
+            status = "stopped (Ctrl+C)"
+            print("\nstep stopped (Ctrl+C)")
+        except Exception as e:  # noqa: BLE001  one failed step must not end the session: it is logged and skipped
+            status = f"error: {e}"
+            traceback.print_exc()
+        finally:
+            close_detectors()
+            if self.hw is not None:
+                try:
+                    self.hw.set_wheels(0.0, 0.0)
+                except Exception as e:  # noqa: BLE001  serial gone: the Arduino stops by itself after 300 ms
+                    print(f"could not send the stop to the wheels: {e}")
+        self.steps.append({"n": n, "step": key, "status": status, "seconds": round(time.monotonic() - t0)})
+        self.save()
+        print(f"--- step {n} {status} ({time.monotonic() - t0:.0f} s)")
+        return True
+
+
+FULL_STEPS = [   # (key, title, what to do, FullDiag method)
+    ("system", "Pi, camera, power, code",
+     ("Nothing to do: reads the Pi state (power, temperature, memory, disk), the camera, the versions, and copies the "
+      "code and the params in use."), "system"),
+    ("check", "Hardware check",
+     ("Robot on the floor, the line a few cm to the LEFT of the robot centre. Halfway it asks you to LIFT the robot "
+      "(wheels free) and to say which wheels turned."), "check"),
+    ("sonar", "Sonar servo direction",
+     ("Robot still. A box about 30 cm away on the LEFT (between the front-left diagonal and right beside the "
+      "robot); nothing ahead or to the right for 1 m. The sonar sweeps from right to left, up to 90 deg each side: "
+      "watch that its mount does not hit the robot."), "sonar_sweep"),
+    ("sonardist", "Sonar distance",
+     ("Sonar straight ahead. First nothing in front for 1.5 m; then a box straight ahead at about 25 cm and at about "
+      "50 cm from the FRONT OF THE SONAR, each distance measured with the tape."), "sonar_distance"),
+    ("odometry", "Odometry scale (WHEEL_R)",
+     ("Robot on a straight line with 1.3 m free ahead; tape measure ready. Mark a fixed point of the robot on the "
+      "floor; it drives 1 m by the encoders and you measure how far the mark moved. 2-3 runs."), "odometry_scale"),
+    ("turn", "Turn scale (K)",
+     ("Robot centred and square in the middle of a long straight line: at least 50 cm of line AHEAD and 50 cm "
+      "BEHIND it, nothing around (it spins in place). It spins about 1.1 turns to the left, then to the right. "
+      "Nothing to measure: the camera does it."), "turn_scale"),
+    ("camcal", "Camera geometry (H_CAM, TILT, X_CAM)",
+     ("Robot still and square on a straight line, a crossing ahead. Ruler for the lens height; tape for 3 distances "
+      "(23-35 cm) from the robot centre (midway between the axles) to the middle of the crossing tape."),
+     "camera_geometry"),
+    ("shapes", "Node shapes, robot still",
+     ("In turn: a +, a T from its stem, a T from one arm, an L. Each 25-35 cm ahead, distance measured with the "
+      "tape. 15 images each, about 3 s."), "shapes"),
+    ("nodestop", "Stop on the node centre",
+     ("Robot on a line 0.8-1.5 m before a node. It drives, sees the node and stops on its centre; you measure where "
+      "it stopped (+ = past the centre). 3 runs from different starts."), "stops"),
+    ("nodegap", "Spacing between nodes",
+     "Robot on a straight grid line just before a node, with 4 nodes and nothing else ahead (about 4 m).", "gap"),
+    ("loop", "Loop cost and CPU load",
+     "Robot still on a line, a crossing 25-35 cm ahead. Motors off. 2 x 20 s: with and without the live view.",
+     "loop_cost"),
+    ("eight", "Drive the 8 (60 s, recorded)",
+     ("Robot on the 8 track. It follows the line for 60 s and records every image. Once, put a box in its way on a "
+      "straight, and take it away after it stops. At the end, type what you saw."), "eight"),
+    ("uturn", "Obstacle that stays: U-turn (40 s, recorded)",
+     ("Robot on a straight of the 8 (or a grid line). Put a box on the line 60-80 cm ahead and LEAVE it there: it "
+      "must slow down, stop at about 25 cm, wait 2 s, turn back (U-turn) and follow the line away."), "uturn"),
+    ("wander", "Random walk on the grid (120 s, recorded)",
+     ("Robot on a grid line. At each node it draws one of the exits it sees; after a turn the sonar checks it and a "
+      "blocked one is replaced. Move boxes onto exits and lines during the walk."), "wander"),
+    ("mission", "Grid mission (up to 180 s, recorded)",
+     ("Robot on the centre of node {start} facing {heading}; goal {goal} ({n}x{n} grid, {g} m between nodes). "
+      "Once, put a box on its path a little after a node."), "mission"),
+    ("delivery", "Delivery mission of params_entrega.ini (up to 180 s, recorded)",
+     ("Robot on the centre of node {d_start} facing {d_heading}; goal {d_goal}. Nothing on the way: this is the run "
+      "of the delivery."), "delivery"),
+]
+
+
+def set_value(text, section, key, value):
+    """ini text with `key = ...` of [section] set to value, its comment kept. Returns (text, old value or None)."""
+    out, current, old = [], None, None
+    for line in text.splitlines(keepends=True):
+        m = re.match(r"\s*\[(\w+)\]", line)
+        if m:
+            current = m.group(1)
+        elif current == section and old is None:
+            m = re.match(rf"({re.escape(key)}\s*=\s*)(.*?)(\s+#.*)?(\r?\n)?$", line)
+            if m:
+                old = m.group(2)
+                line = m.group(1) + value + (m.group(3) or "") + (m.group(4) or "")
+        out.append(line)
+    return "".join(out), old
+
+
+def set_spacing(text, g):
+    """Every MISSION tuple of the text (also the commented example) with g as its last number (m between nodes)."""
+    return re.sub(r'(\("MISSION".*,\s*)([0-9.]+)(\s*\))', lambda m: f"{m.group(1)}{g:.3f}{m.group(3)}", text)
+
+
+def proposed_changes(results):
+    """[(section, key, new value text, why)] and notes, from the measures of the session."""
+    changes, notes = [], []
+    odo = results.get("odometry")
+    if odo:
+        changes.append(("robot_hardware", "WHEEL_R", f"{odo['WHEEL_R']:.4f}",
+                        (f"odometry: tape / encoders over {len(odo['ratios'])} run(s), "
+                         f"{[round(r, 4) for r in odo['ratios']]}")))
+        notes.append(f"WHEEL_R also goes in robo_fsm.ino (const float WHEEL_R = {odo['WHEEL_R']:.4f};), then upload")
+    cam = results.get("camcal")
+    if cam and cam["rms_px"] <= 2.0:
+        why = f"camcal: fit on {len(cam['distances'])} distances, residual {cam['rms_px']:.2f} px"
+        changes += [("line_follower", "H_CAM", f"{cam['H_CAM']:.3f}", why),
+                    ("line_follower", "TILT_deg", f"{cam['TILT_deg']:.1f}", why),
+                    ("line_follower", "X_CAM", f"{cam['X_CAM']:.3f}", why),
+                    ("line_follower", "BANDS", str(cam["BANDS"]), "camcal: the follower looks at the same image rows"),
+                    ("line_follower", "GAIN", f"{cam['GAIN']:.2f}", "camcal: the same steering with the new geometry")]
+    elif cam:
+        notes.append(f"camcal residual {cam['rms_px']:.2f} px (> 2): a distance was mistyped or measured from "
+                     "another point; camera values NOT proposed")
+    turn = results.get("turn")
+    if turn:
+        k, why = turn["K"], f"turn: encoders vs camera over {len(turn['ratios'])} half turn(s)"
+        if odo:                         # the heading is WHEEL_R / K: a new WHEEL_R moves K with it
+            k *= odo["WHEEL_R"] / turn["WHEEL_R_used"]
+            why += ", scaled to the new WHEEL_R"
+        changes.append(("line_follower", "K", f"{k:.3f}", why))
+    for res in results.get("sonardist") or []:
+        if res["true_cm"] is None and res.get("false_echoes"):
+            notes.append(f"sonar: {res['false_echoes']} echo(es) under 1 m with nothing ahead: false stops possible")
+        elif res["true_cm"] is not None and "median_cm" in res and abs(res["median_cm"] - res["true_cm"]) > 3:
+            notes.append(f"sonar reads {res['median_cm']:.0f} cm for {res['true_cm']:.0f} cm: D_STOP "
+                         f"({100 * D_STOP:.0f} cm) and D_SCAN ({100 * D_SCAN:.0f} cm) are compared with this reading")
+    shapes = results.get("shapes") or {}
+    tilts = [tilt_for(r["measured"], r["bars_d"]) for r in shapes.values()
+             if "bars_d" in r and abs(r["bars_d"] - r["measured"]) <= MAX_ERR]
+    if tilts and not (cam and cam["rms_px"] <= 2.0):
+        changes.append(("line_follower", "TILT_deg", f"{math.degrees(float(np.median(tilts))):.1f}",
+                        f"node shapes: camera distance vs tape on {len(tilts)} shape(s) (camcal not available)"))
+    son = results.get("sonar")
+    if son and son.get("box_at_deg") is not None and son["box_at_deg"] < 0:
+        changes.append(("robot_hardware", "SONAR_SIGN", str(-SONAR_SIGN),
+                        f"sonar: the box on the left was seen at {son['box_at_deg']:+d} deg"))
+    gap = results.get("nodegap")
+    if gap and gap["consistent"]:
+        changes.append(("fsm", "MISSION spacing", f"{gap['spacing']:.3f}",
+                        f"nodegap: median of {[round(x, 3) for x in gap['gaps']]}"))
+    elif gap:
+        notes.append(f"nodegap gaps {[round(x, 3) for x in gap['gaps']]} differ by more than 10 cm: spacing NOT "
+                     "proposed (a node missed or seen twice)")
+    return changes, notes
+
+
+def write_proposals(results, name):
+    """params_proposed.ini and params_entrega_proposed.ini (the params with the measured values) and
+    params_changes.txt (what changed, from what, why). Nothing in Robo_FSM/ is touched."""
+    changes, notes = proposed_changes(results)
+    report = [f"Params proposed by diag.py full, session {name}", ""]
+    sources = [("params_proposed.ini", PARAMS_PATH),
+               ("params_entrega_proposed.ini", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                            "params_entrega.ini"))]
+    for out_name, src in sources:
+        if not os.path.exists(src) or (out_name != "params_proposed.ini" and os.path.samefile(src, PARAMS_PATH)):
+            continue
+        with open(src) as fh:
+            text = fh.read()
+        report.append(f"{out_name} (from {os.path.basename(src)}):")
+        for section, key, value, why in changes:
+            if key == "MISSION spacing":
+                text = set_spacing(text, float(value))
+                report.append(f"  [{section}] MISSION last number -> {value}   ({why})")
+                continue
+            text, old = set_value(text, section, key, value)
+            report.append(f"  [{section}] {key}: {old} -> {value}   ({why})" if old is not None else
+                          f"  [{section}] {key}: not in the file, NOT set")
+        if not changes:
+            report.append("  no change: nothing was measured, or every measure agreed with the params")
+        header = (f"# Proposed by diag.py full (session {name}): see params_changes.txt. Check it, then copy it over "
+                  f"pi/{os.path.basename(src)}.\n")
+        with open(out_name, "w") as fh:
+            fh.write(header + text)
+        report.append("")
+    report += ["Notes:"] + [f"  - {n}" for n in notes] if notes else []
+    with open("params_changes.txt", "w") as fh:
+        fh.write("\n".join(report) + "\n")
+    print("\n".join(report))
+
+
+def full():
+    """Every check of this file in one guided run; one zip at the end (see the section comment above)."""
+    first = int(sys.argv[2]) if len(sys.argv) > 2 else 1
+    name = "diag_" + time.strftime("%Y%m%d-%H%M%S")
+    folder = os.path.join(SESSIONS, name)
+    os.makedirs(folder)
+    os.chdir(folder)                   # every file a step writes (diag.png, camcal_*.jpg...) lands in the session
+    console = ConsoleCopy("console.txt")
+    builtins.input = logged_input(console)
+    start, heading, goal, n, g = (MISSION or DEFAULT_MISSION)[1:]
+    try:
+        d_start, d_heading, d_goal = ini_value(ENTREGA, "fsm", "MISSION")[1:4]
+    except Exception as e:  # noqa: BLE001  the delivery step will report it; the others go on
+        print(f"WARNING: no MISSION in {ENTREGA}: {e}")
+        d_start, d_heading, d_goal = "?", "E", "?"
+    steps = [(k, t, x.format(start=start, heading=HEADINGS[heading], goal=goal, n=n, g=g, d_start=d_start,
+                             d_heading=HEADINGS.get(d_heading, d_heading), d_goal=d_goal), m)
+             for k, t, x, m in FULL_STEPS]
+    session = FullDiag(folder)
+    print(f"FULL DIAGNOSIS: {len(steps)} steps, about 75 min. Everything is saved in {folder}\n"
+          f"Follow the guide (testes_robo_pi.html). At each step: Enter = start, s = skip, q = finish now.\n"
+          f"Ctrl+C during a step stops that step; at the Enter/s/q question it finishes the session.\n"
+          f"The zip is made at the end, whatever happened.")
+    try:
+        for k, step in enumerate(steps, 1):
+            if k >= first and not session.run(k, step):
+                break
+    except (KeyboardInterrupt, EOFError):
+        print("\nfinishing now")
+    finally:
+        print("\nPi state at the end of the session:")
+        session.results["system_end"] = end = pi_state()
+        for key, value in end.items():
+            print(f"{key}: {value}")
+        try:
+            write_proposals(session.results, name)
+        except Exception:  # noqa: BLE001  the zip must still be made
+            traceback.print_exc()
+        if session.hw is not None:
+            session.hw.stop()
+        session.save()
+        desktop = os.path.expanduser("~/Desktop")
+        dest = os.path.join(desktop if os.path.isdir(desktop) else SESSIONS, name)
+        print(f"\nmaking the zip ({len(session.steps)} step(s) recorded)...")
+        console.close()                # console.txt complete before it goes into the zip
+        os.chdir(SESSIONS)
+        path = shutil.make_archive(dest, "zip", root_dir=SESSIONS, base_dir=name)
+        print(f"\nDONE. The zip: {path} ({os.path.getsize(path) / 1e6:.0f} MB)\n"
+              f"Everything is in it (the terminal too, in console.txt): take it to the Mac with the VNC Viewer "
+              f"file transfer and send it.")
 
 
 if __name__ == "__main__":
     modes = {"all": everything, "camera": camera, "live": live, "wheels": wheels, "encoders": encoders, "pi": pi,
              "speed": speed, "turn": turn, "sonar": sonar, "odometry": odometry, "camcal": camcal, "nodecam": nodecam,
-             "nodestop": nodestop, "nodegap": nodegap, "nodewhy": nodewhy, "gridrecord": gridrecord, "loop": loop}
+             "nodestop": nodestop, "nodegap": nodegap, "nodewhy": nodewhy, "gridrecord": gridrecord, "loop": loop,
+             "full": full}
     modes[sys.argv[1] if len(sys.argv) > 1 else "all"]()

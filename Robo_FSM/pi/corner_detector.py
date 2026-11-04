@@ -204,6 +204,19 @@ class CornerDetector:
             return self.last - s, set(EXITS)
         return None
 
+    def close(self):
+        """Stop the detection process. Only needed when one program makes several detectors (diag.py full):
+        each one would keep its own process, and memory, until the program ends."""
+        if self.parallel != "process" or not self.proc.is_alive():
+            return
+        try:
+            self.conn.send(None)
+        except OSError:
+            pass
+        self.proc.join(timeout=2.0)
+        if self.proc.is_alive():
+            self.proc.terminate()
+
     def report(self):
         if self.n:
             dt = time.monotonic() - self.t0
@@ -220,6 +233,11 @@ class NodeFusion:
     def forget(self):
         for det in self.detectors:
             det.forget()
+
+    def close(self):
+        for det in self.detectors:
+            if hasattr(det, "close"):
+                det.close()
 
     def step(self, image, s, announce=True):
         node = None
