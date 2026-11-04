@@ -89,6 +89,7 @@ def _process_main(conn, scale):
     signal.signal(signal.SIGINT, signal.SIG_IGN)   # Ctrl+C stops the FSM; this process ends with it
     cv2.setNumThreads(1)        # this process keeps to one core; the FSM loop has the others
     try:
+        conn.send("ready")      # imports done: the FSM loop starts sending images only now
         while True:
             job = conn.recv()
             if job is None:
@@ -109,6 +110,7 @@ class CornerDetector:
         self.ms = 0.0
         self.t0 = time.monotonic()
         self.parallel, self.busy = parallel, False
+        self.ready = parallel != "process"      # the process imports cv2 and numpy first (seconds on a Pi 3)
         if parallel == "process":
             ctx = mp.get_context("spawn")       # a fresh interpreter: nothing of the camera is copied
             self.conn, child = ctx.Pipe()
@@ -137,6 +139,12 @@ class CornerDetector:
         announce=False: keeps tracking but announces nothing (the FSM is not following the line)."""
         if self.parallel == "process":
             try:
+                if not self.ready:                  # still importing: do not block the loop on send(), bars only
+                    if not self.conn.poll():
+                        return None
+                    self.conn.recv()
+                    self.ready = True
+                    print(f"[CORNERS] detection process ready after {time.monotonic() - self.t0:.1f} s")
                 if self.busy and self.conn.poll():
                     self._use(*self.conn.recv())
                     self.busy = False

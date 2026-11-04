@@ -17,13 +17,12 @@ load("robot_hardware", globals())
 class RobotHardware:
     def __init__(self, time_step_ms=64):
         self.time_step_ms = time_step_ms
-        self.ser = serial.Serial(PORT, 115200, timeout=0)
-        time.sleep(2)
-        self.ser.reset_input_buffer()
+        self.ser = serial.Serial(PORT, 115200, timeout=0)   # opening it resets the Arduino: it boots while the camera starts
         self.buf = b""
         self.reply = None                  # last R, line: answer of the navigator on the Arduino
         self.dist = float("inf")
         self.counts = self.counts0 = None
+        self.alive = False                 # a D, line arrived: the Arduino is up
         self.cam = self._open_camera()
         self.stream = None
         if LIVE_VIEW:
@@ -33,11 +32,21 @@ class RobotHardware:
                 self.stream = CameraStream(CAM_WIDTH, CAM_HEIGHT, CAM_FOV)
             except Exception as e:  # noqa: BLE001
                 print(f"live view off: {e}")
+        self._wait_arduino()
         self.frame = None
         self.w_cmd = self.v_cmd = 0.0
         self.turned = self.travelled = 0.0
         self.t0 = self.next = time.monotonic()
         atexit.register(self.stop)
+
+    def _wait_arduino(self, timeout=3.0):
+        """Wait for the first D, line instead of a fixed sleep: the Arduino rebooted and is sending."""
+        t_end = time.monotonic() + timeout
+        while not self.alive:
+            if time.monotonic() > t_end:
+                raise TimeoutError(f"no D, line from the Arduino on {PORT} after {timeout:.0f} s: is robo_fsm.ino loaded?")
+            time.sleep(0.01)
+            self._read_serial()
 
     @staticmethod
     def _open_camera():
@@ -82,7 +91,7 @@ class RobotHardware:
                     values = [int(x) for x in line[2:].split(",")]
                 except ValueError:
                     continue
-                cm = values[0]
+                cm, self.alive = values[0], True
                 self.dist = cm / 100.0 if cm >= 0 else (float("inf") if cm == -1 else 0.0)
                 if len(values) == 5:
                     self.counts = values[1:]
