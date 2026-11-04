@@ -21,6 +21,7 @@ class RobotHardware:
         time.sleep(2)
         self.ser.reset_input_buffer()
         self.buf = b""
+        self.reply = None                  # last R, line: answer of the navigator on the Arduino
         self.dist = float("inf")
         self.counts = self.counts0 = None
         self.cam = self._open_camera()
@@ -86,6 +87,20 @@ class RobotHardware:
                 if len(values) == 5:
                     self.counts = values[1:]
                     self.counts0 = self.counts0 or self.counts
+            elif line.startswith("R,"):
+                self.reply = line
+
+    def ask(self, command, timeout=0.5):
+        """Send a command to the navigator on the Arduino (arduino_navigator.py) and wait for its R, line."""
+        self.reply = None
+        self.ser.write((command + "\n").encode())
+        t_end = time.monotonic() + timeout
+        while self.reply is None:
+            if time.monotonic() > t_end:
+                raise TimeoutError(f"no answer from the Arduino to {command!r}: is the new robo_fsm.ino loaded?")
+            time.sleep(0.002)
+            self._read_serial()
+        return self.reply
 
     def time(self):
         return time.monotonic() - self.t0

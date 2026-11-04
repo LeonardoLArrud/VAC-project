@@ -2,10 +2,16 @@
 // In:  S<left>,<right>  wheel speed in mm/s, per-wheel PI      M<left>,<right>  raw PWM -255..255      X  stop
 // Out: D,<cm>,<nFR>,<nFL>,<nRR>,<nRL> every 50 ms  (cm: -1 = no echo, -2 = no signal; n = encoder counts)
 // Stops the motors after 300 ms without S or M.
+// Grid mission (navigators.py Mission, ported in navigator.cpp), asked by the Pi (pi/arduino_navigator.py):
+// In:  N<i>,<j>,<heading 0..3 = E N W S>,<goal i>,<goal j>,<n>,<g mm>   new mission
+//      C<exits>,<s mm>  on_node (exits: -1 = None, else bits S=1 L=2 R=4)    B<s mm>,<d mm>  on_blocked
+//      F<kind>          on_fault (0 = node missed, 1 = turn failed)
+// Out: R,<order>,<prior: 0/1>,<s_next mm>,<exits>,<reason>   answer to each of N, C, B, F
 
 #include "Motor.h"
 #include "Parameters.h"
 #include "MyServo.h"
+#include "navigator.h"
 
 const int URM_ECHO = 2;
 const int SERVO_PIN = 26;
@@ -28,6 +34,7 @@ Motor motor[4] = {Motor(vitMotor1, dirMotor1, 0), Motor(vitMotor2, dirMotor2, 0)
 const int ENC_A[4] = {Encoder1A, Encoder2A, Encoder3A, Encoder4A};
 const int ENC_B[4] = {Encoder1B, Encoder2B, Encoder3B, Encoder4B};
 MyServo frontServo(SERVO_PIN, 20, 160, 0);
+Mission mission;
 
 volatile long count[4] = {0, 0, 0, 0};
 volatile unsigned long lastEdge[4] = {0, 0, 0, 0};
@@ -126,10 +133,45 @@ void controlStep() {
   }
 }
 
+void navReply(Order order) {
+  long sNext = 0;
+  int exits = 0;
+  bool known = mission.prior(sNext, exits);
+  Serial.print("R,");
+  Serial.print(orderName(order));
+  Serial.print(known ? ",1," : ",0,");
+  Serial.print(sNext);
+  Serial.print(",");
+  Serial.print(exits);
+  Serial.print(",");
+  Serial.println(mission.why());
+}
+
+void navCommand(char c) {
+  if (c == 'N') {
+    long v[7];
+    for (int k = 0; k < 7; k++) v[k] = Serial.parseInt();
+    Node start = {(int8_t)v[0], (int8_t)v[1]}, goal = {(int8_t)v[3], (int8_t)v[4]};
+    navReply(mission.begin(start, (int)v[2], goal, (int)v[5], v[6]) ? GO_ON : STOP);
+  } else if (c == 'C') {
+    int exits = Serial.parseInt();
+    long s = Serial.parseInt();
+    navReply(mission.onNode(exits, s));
+  } else if (c == 'B') {
+    long s = Serial.parseInt();
+    long d = Serial.parseInt();
+    navReply(mission.onBlocked(s, d));
+  } else {
+    navReply(mission.onFault(Serial.parseInt()));
+  }
+}
+
 void readCommands() {
   while (Serial.available() > 0) {
     char c = Serial.read();
-    if (c == 'S' || c == 'M') {
+    if (c == 'N' || c == 'C' || c == 'B' || c == 'F') {
+      navCommand(c);
+    } else if (c == 'S' || c == 'M') {
       int left = Serial.parseInt();
       if (Serial.peek() == ',') Serial.read();
       int right = Serial.parseInt();

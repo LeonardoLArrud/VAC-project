@@ -15,6 +15,10 @@ The Arduino only applies the PWM it receives and reports the ultrasound distance
 
 - Pi to Arduino: `S<left>,<right>` wheel speed in mm/s (per-wheel PI on the encoders), `M<left>,<right>` raw PWM -255..255, `X` stop. No command for 300 ms: motors stop.
 - Arduino to Pi: `D,<cm>,<nFR>,<nFL>,<nRR>,<nRL>` every 50 ms (cm: -1 = no echo, -2 = no signal; n = encoder counts).
+- Grid mission on the Arduino (`params.ini` `NAV_ON_ARDUINO = True`): `navigators.Mission` ported to C++ in
+  `arduino/robo_fsm/navigator.cpp`, asked by `pi/arduino_navigator.py`. Pi to Arduino: `N<i>,<j>,<heading 0-3 = ENWS>,<goal i>,<goal j>,<n>,<g mm>`
+  (new mission), `C<exits>,<s mm>` (on_node; exits -1 = None, else bits S=1 L=2 R=4), `B<s mm>,<d mm>` (on_blocked),
+  `F<0 node missed | 1 turn failed>` (on_fault). Arduino to Pi: `R,<order>,<prior 0/1>,<s_next mm>,<exits>,<reason>`.
 
 ## Run
 

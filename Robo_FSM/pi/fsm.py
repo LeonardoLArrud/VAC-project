@@ -10,7 +10,7 @@ from node_detector import ZONE, NodeDetector
 from params import load
 
 # values: params.ini [fsm]
-MISSION = AUTO_START = TIME_STEP = None
+MISSION = NAV_ON_ARDUINO = AUTO_START = TIME_STEP = None
 D_STOP = D_SLOW = SLOW_FRACTION = T_STATIC = T_MIN = N_OK = None
 SEARCH_RATE = TURN_RATE = TURN_EARLY = TURN_LATE = TURN_TOL_Y = None
 V_NODE = K_HOLD = D_STRAIGHT = PRIOR_TOL = None
@@ -166,6 +166,10 @@ class FSM:
 
 
 def main(hw, nav=Explorer):
+    global Mission
+    if NAV_ON_ARDUINO:                  # the grid mission runs on the Arduino; FSM.idle() creates it as before
+        from arduino_navigator import ArduinoMission
+        Mission = lambda *args: ArduinoMission(hw, *args)  # noqa: E731
     width, height, fov = hw.camera_info()
     fsm = FSM(LineFollower(width, height, fov, TIME_STEP / 1000.0, hw.wheel_v_max()), nav)
     detector = NodeDetector(width, height, fov, fsm.follower.mask)
