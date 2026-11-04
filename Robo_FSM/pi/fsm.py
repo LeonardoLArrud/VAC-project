@@ -11,7 +11,7 @@ from node_detector import ZONE, NodeDetector
 from params import load
 
 # values: params.ini [fsm]
-MISSION = NAV_ON_ARDUINO = AUTO_START = TIME_STEP = None
+MISSION = AUTO_START = TIME_STEP = None
 D_STOP = D_SLOW = SLOW_FRACTION = T_STATIC = T_MIN = N_OK = None
 SEARCH_RATE = TURN_RATE = TURN_EARLY = TURN_LATE = TURN_TOL_Y = None
 V_NODE = K_HOLD = D_STRAIGHT = PRIOR_TOL = NODES = None
@@ -239,6 +239,7 @@ class FSM:
 
 
 STAGES = ("capture", "nodes", "fsm", "io", "view")   # parts of one loop cycle, timed by LoopTimer
+WATCHDOG_MS = 300   # robo_fsm.ino TIMEOUT_MS: no wheel command for this long and the Arduino stops the motors
 
 
 class LoopTimer:
@@ -277,6 +278,10 @@ class LoopTimer:
               f"busy mean {sum(busy) / len(busy):.0f} ms, max {max(busy):.0f} ms")
         for k, ms in zip(STAGES, zip(*stages)):
             print(f"[LOOP]   {k:8s} mean {sum(ms) / len(ms):5.1f} ms, max {max(ms):5.1f} ms")
+        stalls = sum(p > WATCHDOG_MS for p in period)
+        if stalls:
+            print(f"[LOOP] WARNING: {stalls} cycle(s) over {WATCHDOG_MS} ms: the Arduino stopped the motors each time "
+                  f"(jerks). The serial link may need a core of its own")
 
 
 def look_for_node(detector, fsm, image, s):
@@ -289,10 +294,6 @@ def look_for_node(detector, fsm, image, s):
 
 
 def main(hw, nav=Explorer):
-    global Mission
-    if NAV_ON_ARDUINO:                  # the grid mission runs on the Arduino; FSM.idle() creates it as before
-        from arduino_navigator import ArduinoMission
-        Mission = lambda *args: ArduinoMission(hw, *args)  # noqa: E731
     width, height, fov = hw.camera_info()
     fsm = FSM(LineFollower(width, height, fov, TIME_STEP / 1000.0, hw.wheel_v_max()), nav)
     detector = None                     # MISSION = None (test of the 8): line and obstacles only

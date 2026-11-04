@@ -24,11 +24,11 @@ class RobotHardware:
         self.time_step_ms = time_step_ms
         self.ser = serial.Serial(PORT, 115200, timeout=0)   # opening it resets the Arduino: it boots while the camera starts
         self.buf = b""
-        self.reply = None                  # last R, line: answer of the navigator on the Arduino
         self.dist = float("inf")
         self.sonar_deg = 0                 # servo offset last sent (robo_fsm.ino starts it straight ahead)
         self.counts = self.counts0 = None
         self.alive = False                 # a D, line arrived: the Arduino is up
+        self.n_d = 0                       # D, lines read so far (20 per second when the serial keeps up)
         self.cam = self._open_camera()
         self.stream = None
         if LIVE_VIEW:
@@ -98,24 +98,11 @@ class RobotHardware:
                 except ValueError:
                     continue
                 cm, self.alive = values[0], True
+                self.n_d += 1
                 self.dist = cm / 100.0 if cm >= 0 else (float("inf") if cm == -1 else 0.0)
                 if len(values) == 5:
                     self.counts = values[1:]
                     self.counts0 = self.counts0 or self.counts
-            elif line.startswith("R,"):
-                self.reply = line
-
-    def ask(self, command, timeout=0.5):
-        """Send a command to the navigator on the Arduino (arduino_navigator.py) and wait for its R, line."""
-        self.reply = None
-        self.ser.write((command + "\n").encode())
-        t_end = time.monotonic() + timeout
-        while self.reply is None:
-            if time.monotonic() > t_end:
-                raise TimeoutError(f"no answer from the Arduino to {command!r}: is the new robo_fsm.ino loaded?")
-            time.sleep(0.002)
-            self._read_serial()
-        return self.reply
 
     def time(self):
         return time.monotonic() - self.t0
