@@ -329,7 +329,7 @@ def nodecam(cam=None, frames=20):
 
 def nodewhy(period=0.5):
     """Robot still (or pushed by hand) before a node: every period, what each detector sees in the image and
-    why it gives no node. Saves the last image as nodewhy.jpg and the bars mask as nodewhy_mask.png. Ctrl+C stops."""
+    why it gives no node. Saves the last image as nodewhy.jpg and the top view of the floor with its tape as nodewhy_mask.png. Ctrl+C stops."""
     import corner_detector
     from corner_detector import CornerDetector
 
@@ -345,12 +345,13 @@ def nodewhy(period=0.5):
             centre, n, _ = corner_detector._detect(f.grey(img), corners.scale)
             d = corners._ahead(centre) if centre else None
             seen = f"'+' at {100 * d:.0f} cm" if d else "no '+'"
-            print(f"bars (threshold {det.threshold:.0f}): {det.why}\n  corners: {n} concave corners, {seen}")
+            print(f"bars: {det.why}\n  corners: {n} concave corners, {seen}")
             cv2.imwrite("nodewhy.jpg", img)
-            cv2.imwrite("nodewhy_mask.png", det.white(img).astype(np.uint8) * 255)
+            top, tape = det.white(img)
+            cv2.imwrite("nodewhy_mask.png", np.hstack([top, tape.astype(np.uint8) * 255]))
             time.sleep(period)
     except KeyboardInterrupt:
-        print("saved nodewhy.jpg (camera) and nodewhy_mask.png (what the bars detector sees as white)")
+        print("saved nodewhy.jpg (camera) and nodewhy_mask.png (top view of the floor | what the node detector takes as tape)")
     finally:
         cam.stop()
 
@@ -416,7 +417,7 @@ def gridrecord(seconds=None):
     cmd, reason = "START", ""
     with open(os.path.join(folder, "log.csv"), "w", newline="", buffering=1) as fl:
         log = csv.writer(fl)
-        log.writerow(["t", "image", "state", "v", "w", "s", "heading", "dist", "line", "node", "bars_threshold",
+        log.writerow(["t", "image", "state", "v", "w", "s", "heading", "dist", "line", "node", "bars_shape",
                       "bars_why", "fsm_reason"])
         try:
             while hw.step() and hw.time() < seconds:
@@ -432,7 +433,7 @@ def gridrecord(seconds=None):
                 log.writerow([f"{t:.3f}", rec.image(image), fsm.state, f"{v:.4f}", f"{w:.4f}", f"{s:.4f}",
                               f"{hw.heading():.4f}", f"{fsm.d:.3f}", fsm.line,
                               f"{node[0]:.3f} {''.join(sorted(node[1]))}" if node else "",
-                              f"{det.threshold:.0f}", det.why, fsm.reason if fsm.reason != reason else ""])
+                              det.shape, det.why, fsm.reason if fsm.reason != reason else ""])
                 reason = fsm.reason
         except KeyboardInterrupt:
             pass
