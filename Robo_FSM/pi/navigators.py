@@ -2,8 +2,9 @@
 import os
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))   # graph/: the first one going up
-sys.path.insert(0, next(p for p in (os.path.join(HERE, *[".."] * k) for k in range(6)) if os.path.isdir(os.path.join(p, "graph"))))
+HERE = os.path.dirname(os.path.abspath(__file__))   # Robo_FSM/graph/: the first one going up (pi/.. or <repo>/Robo_FSM)
+ROOTS = (os.path.join(HERE, *[".."] * k, sub) for k in range(6) for sub in ("", "Robo_FSM"))
+sys.path.insert(0, next(p for p in ROOTS if os.path.isdir(os.path.join(p, "graph"))))
 from graph.path import dijkstra
 from graph.track import grid
 
