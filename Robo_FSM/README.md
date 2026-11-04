@@ -8,6 +8,7 @@ The Arduino only applies the PWM it receives and reports the ultrasound distance
 | Folder | What it has |
 |---|---|
 | `pi/` | `fsm.py` (FSM and main loop), `line_follower.py`, `robot_hardware.py` (Pi Camera + serial), `navigators.py` and `node_detector.py` (same files as the Webots controller) |
+| `graph/` | `path.py` (Dijkstra) and `track.py` (grid map) for `Mission`: copies of the repo's `graph/`, so `Robo_FSM/` alone runs on the Pi. Copy them again when `graph/` changes |
 | `arduino/robo_fsm/` | `robo_fsm.ino` and the course files it uses (`Motor`, `MyServo`, `Parameters.h`) |
 
 ## Serial protocol (115200)
@@ -18,7 +19,7 @@ The Arduino only applies the PWM it receives and reports the ultrasound distance
 ## Run
 
 1. Upload `arduino/robo_fsm/robo_fsm.ino` (Bluno Mega 2560).
-2. Clone the repo on the Pi, or copy `pi/` and `graph/` next to it (`navigators.py` finds `graph/` going up).
+2. Copy `Robo_FSM/` to the Pi (`navigators.py` finds `Robo_FSM/graph/` going up from `pi/`).
    Needs `python3-picamera2`, `python3-serial`, `python3-opencv`, `numpy`.
 3. In `pi/params.ini`, `[fsm]`: `MISSION = None` (8: Explorer) or e.g. `("MISSION", (0, 0), "E", (4, 3), 5, 0.50)`
    (start node, heading, goal, nodes per side, m between nodes: measure the track).
