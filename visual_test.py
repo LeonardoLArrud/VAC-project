@@ -5,7 +5,11 @@ Run from the project root (needs a Python with tkinter, e.g. the team's .venv):
     ../.venv/bin/python visual_test.py
 """
 
+import os
+import sys
 import tkinter as tk
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "Robo_FSM"))   # graph/ lives in Robo_FSM/
 
 from graph.maneuver import maneuver
 from graph.simulation import Simulation, edges, nearest_edge, nearest_node

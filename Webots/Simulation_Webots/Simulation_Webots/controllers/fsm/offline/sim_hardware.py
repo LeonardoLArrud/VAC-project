@@ -45,6 +45,9 @@ class SimHardware(Hardware):
         phi = self.w.phi                          # Motor1..4: right, left, right, left
         return WHEEL_R * ((phi[0] + phi[2]) / 2 - (phi[1] + phi[3]) / 2) / (2 * K_WHEELS)
 
+    def distance(self):
+        return WHEEL_R * float(np.mean(self.w.phi))
+
     def command(self):
         cmd = None
         while self.keys and self.keys[0][0] <= self.w.t + 1e-9:
@@ -55,6 +58,8 @@ class SimHardware(Hardware):
                 cmd = "STOP"
             elif key == "L":
                 self.blind = not self.blind
+            elif isinstance(key, tuple):       # e.g. ("MISSION", start, heading, goal)
+                cmd = key
         return cmd
 
     def wheel_v_max(self):

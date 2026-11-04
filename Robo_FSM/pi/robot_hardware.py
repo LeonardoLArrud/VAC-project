@@ -6,17 +6,12 @@ import time
 import serial
 
 from line_follower import K
+from params import load
 
-PORT = "/dev/ttyACM0"
-CAM_WIDTH, CAM_HEIGHT = 640, 480
-CAM_FOV = math.radians(62.2)
-CAM_ROTATED_180 = True
-PWM_MIN = 45
-V_MAX = 0.60
-USE_ENCODERS = True
-WHEEL_R = 0.0325
-COUNTS_PER_REV = 11 * 21.3
-LIVE_VIEW = True
+# values: params.ini [robot_hardware]
+PORT = CAM_WIDTH = CAM_HEIGHT = CAM_FOV = CAM_ROTATED_180 = USE_ENCODERS = None
+V_MAX = PWM_MIN = WHEEL_R = COUNTS_PER_REV = LIVE_VIEW = None
+load("robot_hardware", globals())
 
 
 class RobotHardware:
@@ -38,8 +33,8 @@ class RobotHardware:
             except Exception as e:  # noqa: BLE001
                 print(f"live view off: {e}")
         self.frame = None
-        self.w_cmd = 0.0
-        self.turned = 0.0
+        self.w_cmd = self.v_cmd = 0.0
+        self.turned = self.travelled = 0.0
         self.t0 = self.next = time.monotonic()
         atexit.register(self.stop)
 
@@ -70,6 +65,7 @@ class RobotHardware:
         else:
             self.next = time.monotonic()
         self.turned += self.w_cmd * dt
+        self.travelled += self.v_cmd * dt
         self._read_serial()
         return True
 
@@ -120,6 +116,11 @@ class RobotHardware:
         phi = [2 * math.pi * (n - n0) / COUNTS_PER_REV for n, n0 in zip(self.counts, self.counts0)]
         return WHEEL_R * ((phi[0] + phi[2]) / 2 - (phi[1] + phi[3]) / 2) / (2 * K)
 
+    def distance(self):
+        if not USE_ENCODERS or self.counts is None:
+            return self.travelled
+        return WHEEL_R * sum(2 * math.pi * (n - n0) / COUNTS_PER_REV for n, n0 in zip(self.counts, self.counts0)) / 4
+
     def command(self):
         return None
 
@@ -137,7 +138,7 @@ class RobotHardware:
             self.ser.write(f"S{round(1000 * v_left)},{round(1000 * v_right)}\n".encode())
         else:
             self.ser.write(f"M{self._pwm(v_left)},{self._pwm(v_right)}\n".encode())
-        self.w_cmd = (v_right - v_left) / (2 * K)
+        self.w_cmd, self.v_cmd = (v_right - v_left) / (2 * K), (v_left + v_right) / 2
 
     def stop(self):
         try:

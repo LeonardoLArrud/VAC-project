@@ -37,3 +37,4 @@ test2.jpg
 
 # --- Local experiments (Webots test worlds, VM extern setup): not versioned ---
 /experiments/
+local/

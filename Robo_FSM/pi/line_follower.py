@@ -7,27 +7,13 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-H_CAM = 0.132
-X_CAM = 0.104
-TILT = math.radians(30)
-BANDS = [0.20, 0.26, 0.31, 0.36]
-K = 0.17
-V0 = 0.27
-GAIN = 1.0  # turn gain on the pure pursuit curvature: > 1 turns harder (as aiming nearer, L / sqrt(GAIN))
-TAU_EFF = 0.10
-A_LAT = 1.0
-A_UP = 0.5
-A_DOWN = 1.5
-THRESHOLD = 150
+from params import load
+
+# values: params.ini [line_follower]
+H_CAM = X_CAM = TILT = BANDS = K = V0 = GAIN = TAU_EFF = A_LAT = A_UP = A_DOWN = None
+THRESHOLD = FILTER = BLUR = OPEN_W = OPEN_H = USE_OTSU = None
+load("line_follower", globals())
 WIDTH = 480
-# Image filter (as in corner_detection_v4.py), against floor reflections that pass THRESHOLD.
-# The opening removes white blobs narrower than OPEN_W or shorter than OPEN_H (px at 640x480).
-# Keep OPEN_W well below the tape width (19 mm tape: 35 px on the far band, 68 px on the near one)
-# and OPEN_H below the height of a crossing tape on the far band (about 16 px).
-FILTER = True
-BLUR = 5
-OPEN_W, OPEN_H = 15, 5
-USE_OTSU = False  # True: threshold = max(Otsu, THRESHOLD); a large glare can then hide the tape
 
 OK, MEMORY, LOST = "OK", "MEMORY", "LOST"
 

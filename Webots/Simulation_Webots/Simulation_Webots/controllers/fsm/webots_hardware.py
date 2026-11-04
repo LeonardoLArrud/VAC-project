@@ -5,7 +5,7 @@ the wheel encoders PS1..PS4 (heading), the URM37 rangefinder and its servo, and
 the keyboard (START/STOP for the tests).
 
 Keys (click the 3D view first): G = START, S or space = STOP, L = blind/unblind the
-camera (test "line disappears and comes back").
+camera (test "line disappears and comes back"), M = the MISSION set in fsm.py (from IDLE).
 """
 from __future__ import annotations
 
@@ -25,8 +25,9 @@ SERVO_LIMIT = 1.58                         # rad, servomoteur min/maxPosition
 
 
 class WebotsHardware(Hardware):
-    def __init__(self, time_step_ms=64):
+    def __init__(self, time_step_ms=64, mission=None):
         super().__init__(time_step_ms)
+        self.mission = mission               # ("MISSION", start, heading, goal) sent by key M, or None
         self.robot = Robot()
         self.cam = self.robot.getDevice("PiCam")
         self.cam.enable(time_step_ms)
@@ -40,7 +41,7 @@ class WebotsHardware(Hardware):
         self.enc_right = [self.robot.getDevice(n) for n in RIGHT_ENCODERS]
         for s in self.enc_left + self.enc_right:
             s.enable(time_step_ms)
-        self._heading0 = None                # encoder heading at the first reading
+        self._heading0 = self._s0 = None     # encoder heading and distance at the first reading
         self.us = self.robot.getDevice("URM37")
         self.us.enable(time_step_ms)
         self.servo = self.robot.getDevice("servomoteur")
@@ -75,6 +76,8 @@ class WebotsHardware(Hardware):
                 cmd = "START"
             elif c in ("S", " "):
                 cmd = "STOP"
+            elif c == "M" and self.mission:
+                cmd = self.mission
             elif c == "L":
                 self.blind = not self.blind
                 print(f"[HW] t={self.time():6.2f}s camera {'BLIND' if self.blind else 'clear'}")
@@ -105,6 +108,14 @@ class WebotsHardware(Hardware):
         if self._heading0 is None:
             self._heading0 = h
         return float(h - self._heading0)
+
+    def distance(self):
+        s = WHEEL_R * sum(e.getValue() for e in self.enc_left + self.enc_right) / 4
+        if np.isnan(s):                      # no value before the first robot.step()
+            return 0.0
+        if self._s0 is None:
+            self._s0 = s
+        return float(s - self._s0)
 
     # ------------------------------------------------------------ rangefinder
     def obstacle_distance(self):
