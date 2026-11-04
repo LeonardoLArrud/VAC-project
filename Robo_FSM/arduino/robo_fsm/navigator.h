@@ -30,6 +30,7 @@ class Mission {                         // goal on the grid, path recomputed at 
   Order onNode(int exits, long sNode);  // on_node(exits, s_node); exits EXITS_NONE: from the map
   Order onBlocked(long s, long d);      // on_blocked(s, d): drop the edge of the obstacle, back to the node behind
   Order onFault(int kind);              // on_fault(kind): node missed is counted as passed
+  Order onExitBlocked(int exits);       // on_exit_blocked(exits): sonar at the node, drop the exit just chosen, choose again
   bool prior(long& sNext, int& exits);  // prior(): false = None
   const char* why() const { return reason_; }
 

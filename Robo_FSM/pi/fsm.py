@@ -1,4 +1,4 @@
-"""FSM of the ST5 robot (IDLE, FOLLOW, NODE, ALIGN, WAIT, SEARCH, TURN) and its main loop. Writes fsm_log.csv."""
+"""FSM of the ST5 robot (IDLE, FOLLOW, NODE, ALIGN, WAIT, SEARCH, TURN, CHECK) and its main loop. Writes fsm_log.csv."""
 import csv
 import math
 import os
@@ -14,13 +14,15 @@ MISSION = NAV_ON_ARDUINO = AUTO_START = TIME_STEP = None
 D_STOP = D_SLOW = SLOW_FRACTION = T_STATIC = T_MIN = N_OK = None
 SEARCH_RATE = TURN_RATE = TURN_EARLY = TURN_LATE = TURN_TOL_Y = None
 V_NODE = K_HOLD = D_STRAIGHT = PRIOR_TOL = NODES = None
-D_BRAKE = V_CREEP = NODE_TOL = T_SETTLE = None
+D_BRAKE = V_CREEP = NODE_TOL = T_SETTLE = T_SCAN = D_SCAN = None
 load("fsm", globals())
 D_SEE = ZONE[0]                     # nodes are announced at the start of the detector zone
 TURNS = {"LEFT": math.pi / 2, "RIGHT": -math.pi / 2, "U_TURN": math.pi}
 
 IDLE, FOLLOW, NODE, ALIGN, WAIT, SEARCH, TURN = "IDLE", "FOLLOW", "NODE", "ALIGN", "WAIT", "SEARCH", "TURN"
-SPINNING = (TURN, SEARCH)           # spinning in place: s does not move, so anything seen would confirm as a node
+CHECK = "CHECK"                     # turn done at a node: still, the sonar reads the exit ahead
+SPINNING = (TURN, SEARCH, CHECK)    # in place: s does not move, so anything seen would confirm as a node
+HEADING = {"STRAIGHT": 0.0, **TURNS}   # direction of each order from the arrival heading
 
 
 class FSM:
@@ -33,7 +35,8 @@ class FSM:
         self.line, self.side = LOST, 1.0
         self.n_ok, self.saved, self.turn_goal, self.y_prev = 0, FOLLOW, math.pi, None
         self.s_node = self.psi_ref = 0.0
-        self.order, self.why, self.node_event = "STOP", "", None
+        self.order, self.why, self.node_event, self.exits = "STOP", "", None, None
+        self.aim, self.check_exit = 0.0, False   # sonar direction (rad, + = left); the turn ends at a node exit
         self.ds, self.t_still, self.t_stop, self.fix, self.fixed, self.t_fix_end = 0.0, 0.0, 0.0, 0, False, 0.0   # ALIGN
 
     def step(self, t, image, dist, heading, cmd, s=0.0, node=None):
@@ -41,6 +44,7 @@ class FSM:
         self.t, self.heading, self.s, self.node_event = t, heading, s, node
         self.dists.append(dist)
         self.d = sorted(self.dists)[len(self.dists) // 2]
+        self.aim = 0.0                      # straight ahead, unless the state says otherwise
         if cmd == "STOP" and self.state != IDLE:
             self.go(IDLE, "STOP command")
         elif self.state in (FOLLOW, NODE) and self.d < D_STOP:
@@ -64,12 +68,12 @@ class FSM:
         return V0 * min(1.0, max(SLOW_FRACTION, (self.d - D_STOP) / (D_SLOW - D_STOP)))
 
     def node_ahead(self, s_node, exits, reason, aim=0.0):
-        self.s_node, self.psi_ref = s_node, self.heading + aim
+        self.s_node, self.psi_ref, self.exits = s_node, self.heading + aim, exits
         self.order, self.why = self.nav.on_node(exits, s_node)
         self.go(NODE, f"{reason}: {self.order} ({self.why})")
 
-    def start_turn(self, theta, reason):
-        self.turn_goal, self.y_prev = theta, None
+    def start_turn(self, theta, reason, check_exit=False):
+        self.turn_goal, self.y_prev, self.check_exit = theta, None, check_exit and D_SCAN > 0
         self.go(TURN, reason)
 
     def idle(self, image, cmd):
@@ -84,6 +88,7 @@ class FSM:
     def follow(self, image, cmd):
         out = self.follower.step(image, self.v_max(), self.v, self.w)
         self.line, self.side = out.status, out.side
+        self.aim = out.c * D_SLOW / 2       # sonar on the point D_SLOW ahead along the curve the robot is on
         prior = self.nav.prior()
         if self.node_event:
             d, exits = self.node_event
@@ -141,7 +146,28 @@ class FSM:
             print(f"[FSM] t={self.t:6.2f}s stopped {100 * off:+.1f} cm from the node centre: "
                   f"moving {'forward' if off < 0 else 'back'}")
             return 0.0, 0.0
-        self.start_turn(TURNS[self.order], f"stopped {100 * off:+.1f} cm from the node centre: {self.order}")
+        self.start_turn(TURNS[self.order], f"stopped {100 * off:+.1f} cm from the node centre: {self.order}", True)
+        return 0.0, 0.0
+
+    def check(self, image, cmd):
+        """Turn done at a node: still for T_SCAN while the sonar, now facing the exit, gets fresh readings.
+        Clear: FOLLOW. Closer than D_SCAN: the navigator drops that exit and the robot turns to the one it chooses."""
+        if self.t - self.t_enter < T_SCAN:
+            return 0.0, 0.0
+        if self.d >= D_SCAN:
+            self.go(FOLLOW, f"exit clear ({self.d:.2f} m)")
+            self.node_from_map()
+            return 0.0, 0.0
+        old = self.order
+        order, why = self.nav.on_exit_blocked(self.exits)
+        reason = f"{old} exit blocked at {self.d:.2f} m: {order} ({why})"
+        if order == "GO_ON":                       # navigator without a map: FOLLOW, the obstacle stop does the rest
+            self.go(FOLLOW, reason)
+        elif order in HEADING:
+            self.order = order
+            self.start_turn(HEADING[order] - HEADING[old], reason, True)
+        else:
+            self.go(IDLE, reason)
         return 0.0, 0.0
 
     def wait(self, image, cmd):
@@ -186,8 +212,10 @@ class FSM:
             self.n_ok = self.n_ok + 1 if y is not None and abs(y) <= TURN_TOL_Y else 0
             if crossed or self.n_ok >= N_OK:
                 how = "line crossed the centre" if crossed else "line ahead"
-                self.end_turn(FOLLOW, f"turn done after {math.degrees(turned):.0f} deg, {how}")
-                self.node_from_map()
+                done = f"turn done after {math.degrees(turned):.0f} deg, {how}"
+                self.end_turn(CHECK if self.check_exit else FOLLOW, done)
+                if not self.check_exit:
+                    self.node_from_map()
                 return 0.0, 0.0
             if self.n_ok:                          # centred: hold still while confirming
                 return 0.0, 0.0
@@ -253,6 +281,8 @@ def main(hw, nav=Explorer):
             fsm.follower.points = []
             v, w = fsm.step(t, image, hw.obstacle_distance(), hw.heading(), cmd, s, node)
             hw.set_wheels(v - K * w, v + K * w)
+            if hasattr(hw, "aim_sonar"):
+                hw.aim_sonar(fsm.aim)
             if hasattr(hw, "show"):
                 hw.show(fsm.follower.points, fsm.follower.cached_mask(image))
             log.writerow([f"{t:.3f}", fsm.state, f"{v:.4f}", f"{w:.4f}", f"{fsm.d:.3f}", fsm.line, f"{s:.3f}",

@@ -1,12 +1,14 @@
 // Arduino for the FSM on the Pi.
 // In:  S<left>,<right>  wheel speed in mm/s, per-wheel PI      M<left>,<right>  raw PWM -255..255      X  stop
+//      A<deg>  sonar servo at 90 + deg (clipped to 20..160 by MyServo)
 // Out: D,<cm>,<nFR>,<nFL>,<nRR>,<nRL> every 50 ms  (cm: -1 = no echo, -2 = no signal; n = encoder counts)
 // Stops the motors after 300 ms without S or M.
 // Grid mission (navigators.py Mission, ported in navigator.cpp), asked by the Pi (pi/arduino_navigator.py):
 // In:  N<i>,<j>,<heading 0..3 = E N W S>,<goal i>,<goal j>,<n>,<g mm>   new mission
 //      C<exits>,<s mm>  on_node (exits: -1 = None, else bits S=1 L=2 R=4)    B<s mm>,<d mm>  on_blocked
 //      F<kind>          on_fault (0 = node missed, 1 = turn failed)
-// Out: R,<order>,<prior: 0/1>,<s_next mm>,<exits>,<reason>   answer to each of N, C, B, F
+//      E<exits>         on_exit_blocked (the sonar sees the exit just chosen blocked)
+// Out: R,<order>,<prior: 0/1>,<s_next mm>,<exits>,<reason>   answer to each of N, C, B, F, E
 
 #include "Motor.h"
 #include "Parameters.h"
@@ -161,6 +163,8 @@ void navCommand(char c) {
     long s = Serial.parseInt();
     long d = Serial.parseInt();
     navReply(mission.onBlocked(s, d));
+  } else if (c == 'E') {
+    navReply(mission.onExitBlocked(Serial.parseInt()));
   } else {
     navReply(mission.onFault(Serial.parseInt()));
   }
@@ -169,8 +173,10 @@ void navCommand(char c) {
 void readCommands() {
   while (Serial.available() > 0) {
     char c = Serial.read();
-    if (c == 'N' || c == 'C' || c == 'B' || c == 'F') {
+    if (c == 'N' || c == 'C' || c == 'B' || c == 'F' || c == 'E') {
       navCommand(c);
+    } else if (c == 'A') {
+      frontServo.setpos(90 + Serial.parseInt());
     } else if (c == 'S' || c == 'M') {
       int left = Serial.parseInt();
       if (Serial.peek() == ',') Serial.read();

@@ -196,6 +196,17 @@ Order Mission::onBlocked(long s, long d) {
   return U_TURN;
 }
 
+Order Mission::onExitBlocked(int ex) {
+  if (!hasNode_) {                      // (navigators.py would crash here)
+    snprintf(reason_, sizeof reason_, "exit blocked before the first node");
+    return STOP;
+  }
+  blockEdge(node_, to_);
+  to_ = node_;
+  h_ = hIn_;
+  return onNode(ex, sAt_);
+}
+
 Order Mission::onFault(int kind) {
   if (kind != FAULT_NODE_MISSED) {
     snprintf(reason_, sizeof reason_, "turn failed");

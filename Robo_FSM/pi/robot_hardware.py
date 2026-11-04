@@ -10,8 +10,13 @@ from params import load
 
 # values: params.ini [robot_hardware]
 PORT = CAM_WIDTH = CAM_HEIGHT = CAM_FOV = CAM_ROTATED_180 = USE_ENCODERS = None
-V_MAX = PWM_MIN = WHEEL_R = COUNTS_PER_REV = LIVE_VIEW = None
+V_MAX = PWM_MIN = WHEEL_R = COUNTS_PER_REV = LIVE_VIEW = SONAR_SIGN = SONAR_MAX = None
 load("robot_hardware", globals())
+
+
+def sonar_degrees(angle):
+    """Servo offset from straight ahead (deg, integer) for a sonar angle (rad, + = left), clipped to SONAR_MAX."""
+    return round(SONAR_SIGN * math.degrees(max(-SONAR_MAX, min(SONAR_MAX, angle))))
 
 
 class RobotHardware:
@@ -21,6 +26,7 @@ class RobotHardware:
         self.buf = b""
         self.reply = None                  # last R, line: answer of the navigator on the Arduino
         self.dist = float("inf")
+        self.sonar_deg = 0                 # servo offset last sent (robo_fsm.ino starts it straight ahead)
         self.counts = self.counts0 = None
         self.alive = False                 # a D, line arrived: the Arduino is up
         self.cam = self._open_camera()
@@ -134,6 +140,13 @@ class RobotHardware:
 
     def obstacle_distance(self):
         return self.dist
+
+    def aim_sonar(self, angle):
+        """Sonar towards angle (rad, + = left). Sent only on a change of 3 deg or more: the servo does not jitter."""
+        deg = sonar_degrees(angle)
+        if abs(deg - self.sonar_deg) >= 3 or (deg == 0 and self.sonar_deg != 0):
+            self.ser.write(f"A{deg}\n".encode())
+            self.sonar_deg = deg
 
     def heading(self):
         if not USE_ENCODERS or self.counts is None:

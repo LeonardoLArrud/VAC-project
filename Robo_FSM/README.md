@@ -1,6 +1,6 @@
 # Robo_FSM: FSM line follower on the real robot
 
-The Pi runs the FSM (IDLE, FOLLOW, NODE, WAIT, SEARCH, TURN) and the pure pursuit follower.
+The Pi runs the FSM (IDLE, FOLLOW, NODE, ALIGN, WAIT, SEARCH, TURN, CHECK) and the pure pursuit follower.
 At each intersection (seen by `node_detector.py`) the navigator decides: `Explorer` (START, e.g. the 8:
 straight on) or `Mission` (`MISSION` in `params.ini`: goal on a grid, Dijkstra from `graph/` at every node).
 The Arduino only applies the PWM it receives and reports the ultrasound distance.

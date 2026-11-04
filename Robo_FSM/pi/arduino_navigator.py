@@ -10,6 +10,11 @@ BITS = {"S": 1, "L": 2, "R": 4}
 FAULTS = {"node missed": 0, "turn failed": 1}
 
 
+def mask(exits):
+    """Exits as the bits the Arduino reads: -1 = None (from the map)."""
+    return -1 if exits is None else sum(BITS[e] for e in exits)
+
+
 class ArduinoMission(Navigator):
     def __init__(self, hw, start, heading, goal, n=5, g=0.50):
         self.hw, self._prior = hw, None
@@ -24,8 +29,10 @@ class ArduinoMission(Navigator):
         return order, why
 
     def on_node(self, exits, s_node=0.0):
-        mask = -1 if exits is None else sum(BITS[e] for e in exits)
-        return self._ask("C%d,%d" % (mask, round(1000 * s_node)))
+        return self._ask("C%d,%d" % (mask(exits), round(1000 * s_node)))
+
+    def on_exit_blocked(self, exits):
+        return self._ask("E%d" % mask(exits))
 
     def on_blocked(self, s, d):
         return self._ask("B%d,%d" % (round(1000 * s), round(1000 * d)))

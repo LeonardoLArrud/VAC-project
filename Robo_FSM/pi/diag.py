@@ -1,5 +1,5 @@
 """Checks on the real robot (Arduino with robo_fsm.ino).
-python3 diag.py [all] | camera | live | wheels | encoders | pi | speed | turn | odometry | camcal | nodecam | nodestop | nodegap | nodewhy | gridrecord [seconds]
+python3 diag.py [all] | camera | live | wheels | encoders | pi | speed | turn | sonar | odometry | camcal | nodecam | nodestop | nodegap | nodewhy | gridrecord [seconds]
 Distance to a node = odometry s + camera d. Calibrate them in this order:
   odometry  follows a straight line for 1 m by the encoders, you measure it: WHEEL_R
   camcal    robot still, a crossing at 3 distances you measure: H_CAM, TILT_deg, X_CAM (tape edges + widths in the image)
@@ -8,6 +8,7 @@ Distance to a node = odometry s + camera d. Calibrate them in this order:
   nodegap   follows a grid line through several nodes: the spacing between nodes (last number of MISSION)
 nodewhy: robot still before a node: what the bars and corners detectors see, and why they give no node
 gridrecord: free walk on the grid recording every camera image + log (recordings/), to tune the detectors offline
+sonar: sweeps the sonar servo right to left, distance at each angle: SONAR_SIGN
 """
 import csv
 import json
@@ -37,7 +38,9 @@ from robot_hardware import (
     USE_ENCODERS,
     V_MAX,
     WHEEL_R,
+    SONAR_MAX,
     RobotHardware,
+    sonar_degrees,
 )
 
 
@@ -181,6 +184,21 @@ def turn():
         drive(ser, RobotHardware._pwm(v_left), RobotHardware._pwm(v_right), seconds)
     deg = float(input("angle the robot turned (degrees): "))
     print(f"line_follower.py: K = {(v_right - v_left) * seconds / (2 * math.radians(deg)):.3f}")
+
+
+def sonar():
+    """Sonar on its servo, robot still: distance every 10 deg from right to left. A + angle must point to the LEFT
+    of the robot (else SONAR_SIGN = -1). In FOLLOW the servo turns the sonar into the curves."""
+    ser = open_serial()
+    top = round(math.degrees(SONAR_MAX))
+    for deg in range(-top, top + 1, 10):
+        ser.write(f"A{sonar_degrees(math.radians(deg))}\n".encode())
+        time.sleep(0.6)                 # servo move + a few echoes
+        st = status(ser)
+        side = "left" if deg > 0 else "right" if deg < 0 else "ahead"
+        print(f"{deg:+4d} deg ({side}): " + ("no data from the Arduino" if st is None else
+              {-1: "no echo", -2: "no signal"}.get(st[0], f"{st[0]} cm")))
+    ser.write(b"A0\n")
 
 
 def loop_report(periods):
@@ -839,6 +857,6 @@ def summary(results):
 
 if __name__ == "__main__":
     modes = {"all": everything, "camera": camera, "live": live, "wheels": wheels, "encoders": encoders, "pi": pi,
-             "speed": speed, "turn": turn, "odometry": odometry, "camcal": camcal, "nodecam": nodecam,
+             "speed": speed, "turn": turn, "sonar": sonar, "odometry": odometry, "camcal": camcal, "nodecam": nodecam,
              "nodestop": nodestop, "nodegap": nodegap, "nodewhy": nodewhy, "gridrecord": gridrecord}
     modes[sys.argv[1] if len(sys.argv) > 1 else "all"]()

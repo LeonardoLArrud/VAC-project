@@ -24,6 +24,9 @@ class Navigator:  # every method answers (order, reason)
     def on_fault(self, kind):    # GO_ON or STOP
         return "GO_ON", kind
 
+    def on_exit_blocked(self, exits):   # sonar: the exit just chosen is blocked. GO_ON (turn anyway) or a new order
+        return "GO_ON", "exit blocked: not handled"
+
     def on_clear(self):
         pass
 
@@ -104,6 +107,13 @@ class Mission(Navigator):  # goal on the grid, path recomputed at every node
         self.to, self.h = back, ((self.h if passed else self.h_in) + 2) % 4
         self.s_next = 2 * s - s_back            # the node behind is s - s_back away
         return "U_TURN", f"edge {edge[0]}-{edge[1]} blocked: back to {back}"
+
+    def on_exit_blocked(self, exits):   # sonar at the node centre: drop the exit just chosen, choose again from here
+        edge = (self.node, self.to)
+        self.map.block_edge(self._id(edge[0]), self._id(edge[1]))
+        self.closed.append(edge)
+        self.to, self.h = self.node, self.h_in
+        return self.on_node(exits, self.s_at)
 
     def on_fault(self, kind):    # node missed: counted as passed
         if kind != "node missed":
