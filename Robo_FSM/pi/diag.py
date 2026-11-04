@@ -268,6 +268,15 @@ def tilt_for(true_d, read_d):
     return TILT + math.atan2(H_CAM, true_d - X_CAM) - math.atan2(H_CAM, read_d - X_CAM)
 
 
+def floor_start():
+    """Distance (m, from the robot centre) of the floor seen at the bottom of the image."""
+    f = (CAM_WIDTH / 2) / math.tan(CAM_FOV / 2)
+    return X_CAM + H_CAM / math.tan(math.atan(((CAM_HEIGHT - 1) / 2) / f) + TILT)
+
+
+MAX_ERR = 0.10      # nodecam: a reading this far from the measured distance is another crossing, not this one
+
+
 def nodecam(cam=None, frames=20):
     """Camera distance to a node: robot still, a crossing at distances you measure. Corrects TILT_deg."""
     from corner_detector import CornerDetector
@@ -277,9 +286,12 @@ def nodecam(cam=None, frames=20):
     f = LineFollower(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, TIME_STEP / 1000.0, V_MAX)
     det = NodeDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, f.grey)
     corners = CornerDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, parallel=None)
+    a, b = ZONE
+    tries = ", ".join(f"{100 * x:.0f}" for x in (a + 0.02, (a + b) / 2, b - 0.02))
     print(f"Robot still on the line, a crossing ahead. Measure from the robot centre (midway between the front and rear "
-          f"axles) to the middle of the crossing tape. Bars read {100 * ZONE[0]:.0f}-{100 * ZONE[1]:.0f} cm, corners "
-          f"~30-55 cm (a '+' only): try 2 or 3 distances, e.g. 45, 52 and 60 cm.")
+          f"axles) to the middle of the crossing tape. The image starts {100 * floor_start():.0f} cm ahead; the bars "
+          f"read {100 * a:.0f}-{100 * b:.0f} cm, the corners a '+' only, fully in the image. "
+          f"Try 2 or 3 distances, e.g. {tries} cm.")
     tilts = []
     try:
         while True:
@@ -287,13 +299,23 @@ def nodecam(cam=None, frames=20):
             if not text:
                 break
             true_d = float(text) / 100
+            if true_d < floor_start() + 0.03:
+                print(f"    too close: the image starts {100 * floor_start():.0f} cm from the robot centre, "
+                      f"so a crossing at {100 * true_d:.0f} cm is not in it (use {100 * ZONE[0]:.0f} cm or more)")
+                continue
             for name, d, n in node_distances(cam, f, det, corners, frames):
                 if d is None:
-                    print(f"    {name}: not seen in {frames} images")
+                    hint = " (they only see a '+', not a T or an L)" if name == "corners" else ""
+                    print(f"    {name}: not seen in {frames} images{hint}")
+                    continue
+                text = f"    {name}: {100 * d:.1f} cm ({n}/{frames} images), error {100 * (d - true_d):+.1f} cm"
+                if abs(d - true_d) > MAX_ERR:          # e.g. the next node, when this one is out of the zone
+                    print(f"{text}: too far from what you measured, another crossing (the next node?): ignored")
                     continue
                 tilts.append(tilt_for(true_d, d))
-                print(f"    {name}: {100 * d:.1f} cm ({n}/{frames} images), error {100 * (d - true_d):+.1f} cm"
-                      f" -> TILT {math.degrees(tilts[-1]):.2f} deg")
+                print(f"{text} -> TILT {math.degrees(tilts[-1]):.2f} deg")
+            if not tilts:
+                print("    to see why a detector sees no node: python3 diag.py nodewhy")
     finally:
         if own:
             cam.stop()
