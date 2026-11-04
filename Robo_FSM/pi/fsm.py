@@ -215,11 +215,16 @@ def main(hw, nav=Explorer):
         Mission = lambda *args: ArduinoMission(hw, *args)  # noqa: E731
     width, height, fov = hw.camera_info()
     fsm = FSM(LineFollower(width, height, fov, TIME_STEP / 1000.0, hw.wheel_v_max()), nav)
-    detector = NodeDetector(width, height, fov, fsm.follower.mask)
-    if NODES != "bars":                 # corner detection v4 (corner_detector.py): "+" crossings
-        from corner_detector import CornerDetector, NodeFusion
-        corners = CornerDetector(width, height, fov)
-        detector = corners if NODES == "corners" else NodeFusion(detector, corners)
+    detector = None                     # MISSION = None (test of the 8): line and obstacles only
+    if MISSION is not None:             # grid mission: the intersections (nodes) are needed
+        detector = NodeDetector(width, height, fov, fsm.follower.mask)
+        if NODES != "bars":             # corner detection v4 (corner_detector.py): "+" crossings
+            from corner_detector import CornerDetector, NodeFusion
+            corners = CornerDetector(width, height, fov)
+            detector = corners if NODES == "corners" else NodeFusion(detector, corners)
+    else:
+        print("[FSM] no MISSION (test of the 8): follows the line and stops for obstacles; "
+              "nodes and corners are not searched")
     path =os.environ.get("FSM_LOG") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "fsm_log.csv")
     with open(path, "w", newline="", buffering=1) as f:
         log = csv.writer(f)
@@ -229,7 +234,9 @@ def main(hw, nav=Explorer):
             if AUTO_START is not None and not fsm.history and t >= AUTO_START:
                 cmd = cmd or MISSION or "START"
             image, s = hw.camera_image(), hw.distance()
-            node = detector.step(image, s, fsm.state == FOLLOW)   # nodes are only used (announced) in FOLLOW
+            node = None                 # nodes are only used (announced) in FOLLOW, and only with a MISSION
+            if detector is not None:
+                node = detector.step(image, s, fsm.state == FOLLOW)
             if node:
                 print(f"[NODE] t={t:6.2f}s s={s:.3f} d={node[0]:.3f} exits={sorted(node[1])}")
             fsm.follower.points = []

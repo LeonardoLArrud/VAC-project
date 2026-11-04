@@ -25,9 +25,11 @@ The Arduino only applies the PWM it receives and reports the ultrasound distance
 1. Upload `arduino/robo_fsm/robo_fsm.ino` (Bluno Mega 2560).
 2. Copy `Robo_FSM/` to the Pi (`navigators.py` finds `Robo_FSM/graph/` going up from `pi/`).
    Needs `python3-picamera2`, `python3-serial`, `python3-opencv`, `numpy`.
-3. In `pi/params.ini`, `[fsm]`: `MISSION = None` (8: Explorer) or e.g. `("MISSION", (0, 0), "E", (4, 3), 5, 0.50)`
-   (start node, heading, goal, nodes per side, m between nodes: measure the track).
-4. On the Pi: `python3 robot_hardware.py` (or `python3 fsm.py`). Starts 1 s after launch, Ctrl+C stops.
+3. In `pi/params.ini`, `[fsm]`: `MISSION = None` (test of the 8: it follows the line and stops for obstacles,
+   **no node and no corner detection**) or e.g. `("MISSION", (0, 0), "E", (4, 3), 5, 0.50)`
+   (start node, heading, goal, nodes per side, m between nodes: measure the track). `pi/params_entrega.ini` is a
+   copy with a delivery mission: `ROBO_PARAMS=params_entrega.ini python3 robot_hardware.py`.
+4. On the Pi: `python3 robot_hardware.py` (or `python3 fsm.py`). Starts `AUTO_START` s after launch (0: at once), Ctrl+C stops.
    Writes `fsm_log.csv`; every intersection is printed as `[NODE] ... exits=[...]`.
 
 ## Before the first test
@@ -40,8 +42,9 @@ Python literals, angles with `_deg` are in degrees; a missing or misspelled name
 - `[line_follower]`: camera geometry `H_CAM`, `X_CAM`, `TILT_deg`; `K` (`python3 diag.py turn`); `V0` (start low,
   e.g. 0.08) and `GAIN`; `THRESHOLD` for the lighting; `OPEN_W`, `OPEN_H` (filter against floor reflections,
   `FILTER = False` turns it off). Check it on `/mask` of the live view.
-- `[fsm]`: `MISSION` (None = the 8 with Explorer), obstacle distances and times, turns.
-  `NODES`: who announces intersections: `"bars"` (`node_detector.py`), `"corners"` (`corner_detector.py`) or `"both"`.
+- `[fsm]`: `MISSION` (None = the 8: line and obstacles only, nodes and corners are not searched), obstacle
+  distances and times, turns. `NODES` (with a MISSION only): who announces intersections: `"bars"`
+  (`node_detector.py`), `"corners"` (`corner_detector.py`) or `"both"`.
 - `[corner_detector]`: the corner detection v4 of `TP-dev-emb/TP_Dev_Emb/corner_detection_v4.py` (a "+" crossing =
   3 or 4 concave corners, exits S, L, R; T and L nodes are left to the bars). Its px sizes are the v4 ones at 1280 px,
   scaled to `CAM_WIDTH`. `PARALLEL = "process"` runs it on another core of the Pi 3 so the 64 ms loop is not slowed;
