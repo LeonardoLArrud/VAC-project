@@ -10,6 +10,7 @@ REACH, AXIS, LINE_W = 0.06, 0.04, 0.04   # m
 THICK = (0.01, 0.03)         # m, bar thickness
 BEYOND = (0.05, 0.15)        # m, where S is looked for
 N_FRAMES, S_TOL, SAME = 3, 0.03, 0.10
+MISS = 1                     # frames without the bar tolerated while confirming
 PERP_TOL = math.radians(15)
 try:  # Robo_FSM: params.ini [node_detector]; the Webots controller has no params.py
     from params import load
@@ -31,16 +32,20 @@ class NodeDetector:
         self.x = x[self.rows]
         self.m = (H_CAM / (f * (math.sin(TILT) + q * math.cos(TILT))))[self.rows]   # m per px
         self.cu = (nu - 1) / 2
-        self.cand, self.last = None, -1.0         # [sum of s + d, frames, exits]; last s_node
+        self.cand, self.last = None, -1.0         # [sum of s + d, frames, exits, misses]; last s_node
 
     def step(self, image, s):
         bar, c = self._bar(self.mask(image)[self.rows] > 0), self.cand
         if bar and abs(s + bar[0] - self.last) > SAME:
             if c and abs(s + bar[0] - c[0] / c[1]) <= S_TOL:
-                c[0], c[1], c[2] = c[0] + s + bar[0], c[1] + 1, c[2] | bar[1]
+                c[0], c[1], c[2], c[3] = c[0] + s + bar[0], c[1] + 1, c[2] | bar[1], 0
             elif not c or c[1] < N_FRAMES:
-                self.cand = [s + bar[0], 1, bar[1]]
-        elif c and (c[1] < N_FRAMES or c[0] / c[1] - s > ZONE[0] + 0.05):   # not seen where it should be
+                self.cand = [s + bar[0], 1, bar[1], 0]
+        elif c and c[1] < N_FRAMES:               # bar lost while confirming: tolerate MISS frames
+            c[3] += 1
+            if c[3] > MISS:
+                self.cand = None
+        elif c and c[0] / c[1] - s > ZONE[0] + 0.05:   # confirmed but not seen where it should be
             self.cand = None
         c = self.cand
         if c and c[1] >= N_FRAMES and c[0] / c[1] - s <= ZONE[0]:

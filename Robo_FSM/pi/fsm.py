@@ -29,7 +29,7 @@ class FSM:
         self.v = self.w = 0.0
         self.d, self.dists = float("inf"), deque(maxlen=3)
         self.line, self.side = LOST, 1.0
-        self.n_ok, self.saved, self.turn_goal = 0, FOLLOW, math.pi
+        self.n_ok, self.saved, self.turn_goal, self.y_prev = 0, FOLLOW, math.pi, None
         self.s_node = self.psi_ref = 0.0
         self.order, self.why, self.node_event = "STOP", "", None
 
@@ -65,7 +65,7 @@ class FSM:
         self.go(NODE, f"{reason}: {self.order} ({self.why})")
 
     def start_turn(self, theta, reason):
-        self.turn_goal = theta
+        self.turn_goal, self.y_prev = theta, None
         self.go(TURN, reason)
 
     def idle(self, image, cmd):
@@ -131,6 +131,7 @@ class FSM:
             self.n_ok += 1
             if self.n_ok >= N_OK and self.t - self.t_enter >= T_MIN:
                 self.go(FOLLOW, "line found")
+                self.node_from_map()
             return 0.0, 0.0
         self.n_ok = 0
         if abs(self.heading - self.heading0) >= 2 * math.pi:
@@ -139,25 +140,36 @@ class FSM:
         return 0.0, self.side * SEARCH_RATE
 
     def turn(self, image, cmd):
-        """Spin until the line is centred, from |goal| - TURN_EARLY to |goal| + TURN_LATE (the wheels slip)."""
+        """Spin until the line is centred, from |goal| - TURN_EARLY to |goal| + TURN_LATE (the wheels slip).
+        Centred: N_OK frames within TURN_TOL_Y, or y changing sign near the axis (the line crossed the centre
+        between two frames: with camera delay it can pass the TURN_TOL_Y window in fewer than N_OK frames)."""
         turned, goal = abs(self.heading - self.heading0), abs(self.turn_goal)
         if turned >= goal - TURN_EARLY:
             target = self.follower.find_target(image)
             self.line = LOST if target is None else OK
-            if target is not None and abs(target[1]) <= TURN_TOL_Y:
-                self.n_ok += 1
-                if self.n_ok >= N_OK:
-                    self.end_turn(FOLLOW, f"turn done after {math.degrees(turned):.0f} deg, line ahead")
-                    prior = self.nav.prior()
-                    if prior and prior[0] - self.s < D_SEE:   # node too close to be seen (after a U-turn)
-                        self.node_ahead(prior[0], None, f"node {prior[0] - self.s:.2f} m ahead")
+            y = None if target is None else target[1]
+            near = y is not None and abs(y) <= 2 * TURN_TOL_Y
+            crossed = near and self.y_prev is not None and y * self.y_prev < 0
+            self.y_prev = y if near else None
+            self.n_ok = self.n_ok + 1 if y is not None and abs(y) <= TURN_TOL_Y else 0
+            if crossed or self.n_ok >= N_OK:
+                how = "line crossed the centre" if crossed else "line ahead"
+                self.end_turn(FOLLOW, f"turn done after {math.degrees(turned):.0f} deg, {how}")
+                self.node_from_map()
                 return 0.0, 0.0
-            self.n_ok = 0
+            if self.n_ok:                          # centred: hold still while confirming
+                return 0.0, 0.0
         if turned >= goal + TURN_LATE:
             order, _ = self.nav.on_fault("turn failed")
             self.end_turn(IDLE if order == "STOP" else SEARCH, f"turned {math.degrees(turned):.0f} deg without the line")
             return 0.0, 0.0
         return 0.0, math.copysign(TURN_RATE, self.turn_goal)
+
+    def node_from_map(self):
+        """Back to FOLLOW after a turn or a search: a next node closer than the camera zone is never seen, take it from the map."""
+        prior = self.nav.prior()
+        if prior and 0.0 <= prior[0] - self.s < D_SEE:
+            self.node_ahead(prior[0], None, f"node {prior[0] - self.s:.2f} m ahead")
 
     def end_turn(self, new, reason):
         self.dists.clear()
