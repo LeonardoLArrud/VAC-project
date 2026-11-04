@@ -1,14 +1,21 @@
 """Checks on the real robot (Arduino with robo_fsm.ino).
-python3 diag.py [all] | camera | live | wheels | encoders | pi | speed | turn | odometry | nodecam | nodestop | nodegap | nodewhy
+python3 diag.py [all] | camera | live | wheels | encoders | pi | speed | turn | odometry | nodecam | nodestop | nodegap | nodewhy | gridrecord [seconds]
 Distance to a node = odometry s + camera d. Calibrate them in this order:
   odometry  follows a straight line for 1 m by the encoders, you measure it: WHEEL_R
   nodecam   robot still, a crossing at a distance you measure: TILT_deg
   nodestop  the whole chain: follows the line and stops on a node centre (as before a turn), you measure the error
   nodegap   follows a grid line through several nodes: the spacing between nodes (last number of MISSION)
 nodewhy: robot still before a node: what the bars and corners detectors see, and why they give no node
+gridrecord: free walk on the grid recording every camera image + log (recordings/), to tune the detectors offline
 """
+import csv
+import json
 import math
+import os
+import queue
+import random
 import sys
+import threading
 import time
 
 import cv2
@@ -17,8 +24,9 @@ import serial
 
 from fsm import D_STOP, FOLLOW, FSM, IDLE, NODES, TIME_STEP
 from line_follower import H_CAM, K, LOST, THRESHOLD, TILT, X_CAM, LineFollower
-from navigators import OrderList
+from navigators import SIDE, Navigator, OrderList
 from node_detector import ZONE, NodeDetector
+from params import PATH as PARAMS_PATH
 from robot_hardware import (
     CAM_FOV,
     CAM_HEIGHT,
@@ -325,6 +333,94 @@ def nodewhy(period=0.5):
         cam.stop()
 
 
+class Wanderer(Navigator):
+    """Free walk on the grid (gridrecord): at a node a random exit (straight counts twice); blocked: U-turn."""
+
+    def on_node(self, exits, s_node=0.0):
+        if not exits:
+            return "STRAIGHT", "wander: exits unknown"
+        options = [SIDE[e] for e in sorted(exits)] + (["STRAIGHT"] if "S" in exits else [])
+        return random.choice(options), f"wander: exits {''.join(sorted(exits))}"
+
+    def on_blocked(self, s, d):
+        return "U_TURN", "wander: blocked"
+
+
+class Recorder:
+    """Writes camera images as JPEG in a thread (the FSM loop does not wait). image() -> file name, or "" if the
+    writer is behind and the image was dropped."""
+
+    def __init__(self, folder):
+        self.folder, self.n, self.dropped = folder, 0, 0
+        os.makedirs(os.path.join(folder, "frames"))
+        self.queue = queue.Queue(maxsize=60)
+        self.thread = threading.Thread(target=self._write, daemon=True)
+        self.thread.start()
+
+    def _write(self):
+        while (job := self.queue.get()) is not None:
+            name, img = job
+            cv2.imwrite(os.path.join(self.folder, "frames", name), img, [cv2.IMWRITE_JPEG_QUALITY, 92])
+
+    def image(self, img):
+        name = f"{self.n:06d}.jpg"
+        try:
+            self.queue.put_nowait((name, img))
+        except queue.Full:
+            self.dropped += 1
+            return ""
+        self.n += 1
+        return name
+
+    def close(self):
+        self.queue.put(None)
+        self.thread.join()
+
+
+def gridrecord(seconds=None):
+    """Free walk on the grid for `seconds` (python3 diag.py gridrecord 120), recording every camera image and a log
+    (recordings/<date>/): the node detectors can then be replayed and tuned offline on real images."""
+    seconds = seconds or (float(sys.argv[2]) if len(sys.argv) > 2 else 120.0)
+    folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings", time.strftime("%Y%m%d-%H%M%S"))
+    hw = RobotHardware(TIME_STEP)
+    f = LineFollower(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, TIME_STEP / 1000.0, hw.wheel_v_max())
+    det = NodeDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, f.grey)
+    fsm = FSM(f, nav=Wanderer)
+    rec = Recorder(folder)
+    with open(PARAMS_PATH) as src, open(os.path.join(folder, "meta.json"), "w") as out:
+        json.dump({"camera": [CAM_WIDTH, CAM_HEIGHT, CAM_FOV], "time_step_ms": TIME_STEP, "seconds": seconds,
+                   "params_ini": src.read()}, out, indent=1)
+    print(f"recording to {folder} for {seconds:.0f} s (Ctrl+C stops). Robot on a grid line: it starts now.")
+    cmd, reason = "START", ""
+    with open(os.path.join(folder, "log.csv"), "w", newline="", buffering=1) as fl:
+        log = csv.writer(fl)
+        log.writerow(["t", "image", "state", "v", "w", "s", "heading", "dist", "line", "node", "bars_threshold",
+                      "bars_why", "fsm_reason"])
+        try:
+            while hw.step() and hw.time() < seconds:
+                t, image, s = hw.time(), hw.camera_image(), hw.distance()
+                node = det.step(image, s, fsm.state == FOLLOW)
+                if node:
+                    print(f"[NODE] t={t:6.2f}s s={s:.3f} d={node[0]:.3f} exits={sorted(node[1])}")
+                f.points = []
+                v, w = fsm.step(t, image, hw.obstacle_distance(), hw.heading(), cmd, s, node)
+                cmd = "START" if fsm.state == IDLE else None      # never stays stopped: back to following
+                hw.set_wheels(v - K * w, v + K * w)
+                hw.show(f.points, f.cached_mask(image))
+                log.writerow([f"{t:.3f}", rec.image(image), fsm.state, f"{v:.4f}", f"{w:.4f}", f"{s:.4f}",
+                              f"{hw.heading():.4f}", f"{fsm.d:.3f}", fsm.line,
+                              f"{node[0]:.3f} {''.join(sorted(node[1]))}" if node else "",
+                              f"{det.threshold:.0f}", det.why, fsm.reason if fsm.reason != reason else ""])
+                reason = fsm.reason
+        except KeyboardInterrupt:
+            pass
+        finally:
+            hw.set_wheels(0.0, 0.0)
+            rec.close()
+    print(f"{rec.n} images saved, {rec.dropped} dropped (writer behind) in {folder}\n"
+          f"copy it to the Mac: tar czf rec.tgz -C {os.path.dirname(folder)} {os.path.basename(folder)}")
+
+
 def nodestop(hw=None):
     """The whole chain, with the FSM: follows the line, a node is announced, it stops on the node centre."""
     hw = hw or RobotHardware(TIME_STEP)
@@ -506,5 +602,5 @@ def summary(results):
 if __name__ == "__main__":
     modes = {"all": everything, "camera": camera, "live": live, "wheels": wheels, "encoders": encoders, "pi": pi,
              "speed": speed, "turn": turn, "odometry": odometry, "nodecam": nodecam, "nodestop": nodestop,
-             "nodegap": nodegap, "nodewhy": nodewhy}
+             "nodegap": nodegap, "nodewhy": nodewhy, "gridrecord": gridrecord}
     modes[sys.argv[1] if len(sys.argv) > 1 else "all"]()

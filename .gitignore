@@ -38,3 +38,5 @@ test2.jpg
 # --- Local experiments (Webots test worlds, VM extern setup): not versioned ---
 /experiments/
 local/
+# Robot recordings (diag.py gridrecord): camera images and logs, not code
+Robo_FSM/pi/recordings/
