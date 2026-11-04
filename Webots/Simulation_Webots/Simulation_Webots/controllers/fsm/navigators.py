@@ -38,9 +38,9 @@ class Explorer(Navigator):  # no goal (the 8)
         e = {"S"} if "S" in exits else set(exits)
         return (SIDE[e.pop()], "explorer") if len(e) == 1 else ("STOP", f"explorer: no single exit in {sorted(exits)}")
 
-    def on_blocked(self, s, d):  # U-turn once, then STOP
+    def on_blocked(self, s, d):  # U-turn every time it is still blocked: it tries again, never gives up
         self.u_turns += 1
-        return ("U_TURN", "still blocked after 5 s: U-turn") if self.u_turns == 1 else ("STOP", "blocked both ways")
+        return "U_TURN", f"still blocked: U-turn ({self.u_turns} in a row)"
 
     def on_clear(self):
         self.u_turns = 0

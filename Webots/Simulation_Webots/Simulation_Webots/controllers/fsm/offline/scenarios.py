@@ -127,13 +127,14 @@ def static_obstacle():
 
 @scenario
 def blocked_both_ways():
-    """Obstacle ahead and another behind: one U-turn, then IDLE."""
+    """Obstacle ahead and another behind: it never gives up, a U-turn each time it is blocked (tries again)."""
     line = [straight((-3.0, 0.0), (4.5, 0.0))]
     w = World("blocked_both_ways", line, [Obstacle(centre=(1.55, 0.0)), Obstacle(centre=(-0.75, 0.0))], t_end=45)
     f, log = run(w)
     seq = sequence(f)
-    ok = seq == ["IDLE", "FOLLOW", "WAIT", "TURN", "FOLLOW", "WAIT", "IDLE"] and f.reason == "blocked both ways"
-    return ok, f"{' > '.join(seq)}; final reason: {f.reason}; stopped at t = {t_of(f, 'IDLE', after=2):.1f} s"
+    turns = seq.count("TURN")
+    ok = seq[:7] == ["IDLE", "FOLLOW", "WAIT", "TURN", "FOLLOW", "WAIT", "TURN"] and "IDLE" not in seq[1:]
+    return ok, f"{' > '.join(seq)}; {turns} U-turns, never IDLE; last reason: {f.reason}"
 
 
 @scenario
