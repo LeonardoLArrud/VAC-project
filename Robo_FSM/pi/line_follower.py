@@ -51,13 +51,20 @@ class LineFollower:
         self.side = 1.0
         self.points = []  # (row, u, used) of the last image, in follower pixels: for the live view
         self.kernel = np.ones((OPEN_H, OPEN_W), np.uint8)
+        self._mask_img = self._mask = None  # last image and its mask: follower and node detector share one per frame
 
     def _grey(self, img):
         p = self.px_step
         return img[::p, ::p, :3].mean(axis=2)[: self.nv, : self.nu]
 
     def mask(self, img):
-        """1 where the follower sees the line (nv x nu, uint8): blur, threshold, then an opening."""
+        """1 where the follower sees the line (nv x nu, uint8). Computed once per image object."""
+        if img is not self._mask_img:
+            self._mask_img, self._mask = img, self._compute_mask(img)
+        return self._mask
+
+    def _compute_mask(self, img):
+        """Blur, threshold, then an opening."""
         g = self._grey(img).astype(np.uint8)
         if not FILTER:
             return (g > THRESHOLD).astype(np.uint8)
