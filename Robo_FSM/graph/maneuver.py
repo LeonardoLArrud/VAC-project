@@ -1,5 +1,3 @@
-"""Translate a path on the graph into what the car must do at each node."""
-
 from math import atan2, degrees
 
 FOLLOW = "follow"  # no choice at this node: keep following the line
@@ -17,15 +15,34 @@ def maneuver(graph, prev, cur, nxt):
         return U_TURN
     if prev is None or len(graph.adj[cur]) <= 2:
         return FOLLOW
+    (px, py), (cx, cy), (nx, ny) = _positions(graph, (prev, cur, nxt), cur)
+    return _turn((cx - px, cy - py), (nx - cx, ny - cy))
+
+
+def first_maneuver(graph, cur, facing, nxt):
+    """Move at the start: the car stands at cur pointing at its neighbor facing,
+    and must leave towards nxt (first node of the path)."""
+    if nxt == facing:
+        return STRAIGHT
+    (fx, fy), (cx, cy), (nx, ny) = _positions(graph, (facing, cur, nxt), cur)
+    return _turn((fx - cx, fy - cy), (nx - cx, ny - cy))
+
+
+def _positions(graph, nodes, cur):
     try:
-        (px, py), (cx, cy), (nx, ny) = graph.pos[prev], graph.pos[cur], graph.pos[nxt]
+        return [graph.pos[n] for n in nodes]
     except KeyError:
         raise ValueError(f"node positions are needed to choose a turn at {cur}")
-    ax, ay = cx - px, cy - py  # direction the car arrives from
-    bx, by = nx - cx, ny - cy  # direction it must leave in
+
+
+def _turn(a, b):
+    """a: direction the car points to, b: direction it must leave in."""
+    (ax, ay), (bx, by) = a, b
     angle = degrees(atan2(ax * by - ay * bx, ax * bx + ay * by))
     if abs(angle) < STRAIGHT_TOLERANCE:
         return STRAIGHT
+    if abs(angle) > 180 - STRAIGHT_TOLERANCE:
+        return U_TURN
     return LEFT if angle > 0 else RIGHT
 
 

@@ -2,7 +2,7 @@ from math import inf
 
 from graph.path import dijkstra
 
-DYNAMIC_BLOCK_TIME = 30.0  # seconds an edge stays blocked after a detection
+DYNAMIC_BLOCK_TIME = 5.0  # seconds an edge stays blocked after a detection
 
 
 class Navigator:
@@ -22,13 +22,18 @@ class Navigator:
 
     The controller calls advance() every time the car reaches a node, also when it
     comes back to a node after turning around.
+
+    facing: neighbor of start the car points to when placed. With it, the controller
+    gets the first move before driving:
+        first_maneuver(nav.graph, nav.current, nav.facing, nav.next_node())
     """
 
-    def __init__(self, graph, start, goal=None):
+    def __init__(self, graph, start, goal=None, facing=None):
         self.graph = graph
         self.start = start
         self.current = start
         self.previous = None
+        self.facing = facing  # neighbor of start the car points to when placed (or None)
         self.returning_from = None  # node of the blocked edge while driving back
         self.history = [start]  # every node the car went through, in order
         self.last_visit = {start: 0}  # node -> index in history of its last visit
@@ -54,7 +59,7 @@ class Navigator:
             )
         if self.returning_from is not None:
             return  # still driving back: the rest is decided at the node
-        # a sharp turn (C1 -> C2) happens on the spot: no move needed to cross it
+
         if len(self.path) > 1 and self.graph.is_turn(self.path[0], self.path[1]):
             self._cross_to(self.path[1])
             self.path = self.path[1:]
@@ -107,6 +112,8 @@ class Navigator:
         """No route to follow: go straight, else any way but back (the one visited
         longest ago, so the car never circles one part of the track), else back."""
         free = [v for v, _ in self.graph.neighbors(self.current)]
+        if self.previous is None and self.facing in free:
+            return self.facing  # just placed: drive ahead the way the car points
         straight = self.graph.straight_ahead(self.previous, self.current)
         if straight in free:
             return straight
