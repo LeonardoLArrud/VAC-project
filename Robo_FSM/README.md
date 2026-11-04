@@ -41,5 +41,10 @@ Python literals, angles with `_deg` are in degrees; a missing or misspelled name
   e.g. 0.08) and `GAIN`; `THRESHOLD` for the lighting; `OPEN_W`, `OPEN_H` (filter against floor reflections,
   `FILTER = False` turns it off). Check it on `/mask` of the live view.
 - `[fsm]`: `MISSION` (None = the 8 with Explorer), obstacle distances and times, turns.
+  `NODES`: who announces intersections: `"bars"` (`node_detector.py`), `"corners"` (`corner_detector.py`) or `"both"`.
+- `[corner_detector]`: the corner detection v4 of `TP-dev-emb/TP_Dev_Emb/corner_detection_v4.py` (a "+" crossing =
+  3 or 4 concave corners, exits S, L, R; T and L nodes are left to the bars). Its px sizes are the v4 ones at 1280 px,
+  scaled to `CAM_WIDTH`. `PARALLEL = "process"` runs it on another core of the Pi 3 so the 64 ms loop is not slowed;
+  at exit it prints `[CORNERS] ... images/s, ms each`: it needs about 5 images/s or more at `V0 = 0.25`.
 - Checks: `python3 diag.py encoders` (counts go up when each wheel turns forward), then `python3 diag.py pi` (robot suspended, each wheel near 0.10 m/s).
   PI gains `KP`, `KI` and feedforward `U0`, `KFF` at the top of `robo_fsm.ino`; `ENC_SIGN` flips an encoder that counts backwards.

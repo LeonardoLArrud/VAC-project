@@ -13,7 +13,7 @@ from params import load
 MISSION = NAV_ON_ARDUINO = AUTO_START = TIME_STEP = None
 D_STOP = D_SLOW = SLOW_FRACTION = T_STATIC = T_MIN = N_OK = None
 SEARCH_RATE = TURN_RATE = TURN_EARLY = TURN_LATE = TURN_TOL_Y = None
-V_NODE = K_HOLD = D_STRAIGHT = PRIOR_TOL = None
+V_NODE = K_HOLD = D_STRAIGHT = PRIOR_TOL = NODES = None
 load("fsm", globals())
 D_SEE = ZONE[0]                     # nodes are announced at the start of the detector zone
 TURNS = {"LEFT": math.pi / 2, "RIGHT": -math.pi / 2, "U_TURN": math.pi}
@@ -173,7 +173,11 @@ def main(hw, nav=Explorer):
     width, height, fov = hw.camera_info()
     fsm = FSM(LineFollower(width, height, fov, TIME_STEP / 1000.0, hw.wheel_v_max()), nav)
     detector = NodeDetector(width, height, fov, fsm.follower.mask)
-    path = os.environ.get("FSM_LOG") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "fsm_log.csv")
+    if NODES != "bars":                 # corner detection v4 (corner_detector.py): "+" crossings
+        from corner_detector import CornerDetector, NodeFusion
+        corners = CornerDetector(width, height, fov)
+        detector = corners if NODES == "corners" else NodeFusion(detector, corners)
+    path =os.environ.get("FSM_LOG") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "fsm_log.csv")
     with open(path, "w", newline="", buffering=1) as f:
         log = csv.writer(f)
         log.writerow(["t", "state", "v", "w", "dist", "line", "s", "node"])
