@@ -46,7 +46,7 @@ def draw(f, img):
     for dj, row, mj, wj in f.bands:
         cv2.line(out, (0, row), (f.nu - 1, row), (0, 255, 0), 1)
         out[row, m[row] > 0] = (0, 0, 255)
-        u = f._find_line(m, row, f.cu)
+        u = f._find_line(img, row, f.cu)
         if u is not None:
             cv2.circle(out, (int(u), row), 6, (255, 0, 0), 2)
     return g, m, out
@@ -61,7 +61,7 @@ def camera():
     print(f"image {img.shape}, grey min {g.min():.0f} median {np.median(g):.0f} max {g.max():.0f}, THRESHOLD {THRESHOLD}")
     for dj, row, mj, wj in f.bands:
         band = g[row - 2 : row + 3].mean(axis=0)
-        u = f._find_line(m, row, f.cu)
+        u = f._find_line(img, row, f.cu)
         text = "no line"
         if u is not None:
             y = -mj * (u - f.cu)
@@ -573,7 +573,7 @@ def everything():
     cv2.imwrite("diag.png", out)
     found = []
     for dj, row, mj, wj in f.bands:
-        u = f._find_line(m, row, f.cu)
+        u = f._find_line(img, row, f.cu)
         if u is not None and abs(-mj * (u - f.cu)) <= 0.7 * wj:
             found.append((dj, -mj * (u - f.cu)))
     check("Line seen", bool(found), f"{len(found)}/{len(f.bands)} bands (diag.png saved)" if found else

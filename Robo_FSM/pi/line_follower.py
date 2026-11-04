@@ -11,7 +11,7 @@ from params import load
 
 # values: params.ini [line_follower]
 H_CAM = X_CAM = TILT = BANDS = K = V0 = GAIN = TAU_EFF = A_LAT = A_UP = A_DOWN = None
-THRESHOLD = FILTER = BLUR = OPEN_W = OPEN_H = USE_OTSU = None
+THRESHOLD = FILTER = BLUR = OPEN_W = OPEN_H = USE_OTSU = MIN_CONTRAST = None
 load("line_follower", globals())
 WIDTH = 480
 
@@ -50,6 +50,7 @@ class LineFollower:
             if 2 <= row < self.nv - 2:
                 den = math.sin(TILT) + q * math.cos(TILT)
                 self.bands.append((dj, row, H_CAM / (f * den), H_CAM * math.tan(fov / 2) / den))
+        self.side_px = {row: max(3, round(0.025 / mj)) for dj, row, mj, wj in self.bands}   # a tape width, px
         self.u_prev = [self.cu] * len(self.bands)
         self.memory = None
         self.L_lost = BANDS[-1]
@@ -77,34 +78,56 @@ class LineFollower:
         return self._mask if img is self._mask_img else None
 
     def _compute_mask(self, img):
-        """Blur, threshold, then an opening."""
+        return self.mask_stages(img)[-1][1]
+
+    def mask_stages(self, img):
+        """[(name, image)] of every step from the grey image to the mask: blur, threshold, then an opening."""
         g = self.grey(img)
         if not FILTER:
-            return (g > THRESHOLD).astype(np.uint8)
-        g = cv2.blur(g, (BLUR, BLUR))
+            return [("grey", g), (f"grey > {THRESHOLD}", (g > THRESHOLD).astype(np.uint8))]
+        b = cv2.blur(g, (BLUR, BLUR))
         t = THRESHOLD
         if USE_OTSU:
-            t = max(t, cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[0])
-        return cv2.morphologyEx((g > t).astype(np.uint8), cv2.MORPH_OPEN, self.kernel)
+            t = max(t, cv2.threshold(b, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[0])
+        w = (b > t).astype(np.uint8)
+        return [("grey", g), (f"blur {BLUR}", b), (f"> {t:.0f}", w),
+                (f"opening {OPEN_W}x{OPEN_H}", cv2.morphologyEx(w, cv2.MORPH_OPEN, self.kernel))]
 
-    @staticmethod
-    def _find_line(m, row, u_ref):
-        """m: mask from mask(). Centre of the white run on this row closest to u_ref, or None."""
+    def tape_runs(self, img, row):
+        """White runs of the mask on this row (5 rows averaged): start, end (px) and their contrast with the floor
+        beside them, one tape width away on each side seen (grey levels; nan: no floor seen). The tape has sharp
+        edges: contrast >= MIN_CONTRAST; a floor glare fades into the floor around it."""
+        m, g = self.mask(img), self.grey(img)
         white = (m[row - 2 : row + 3].mean(axis=0) > 0.5).astype(np.int8)
         edge = np.diff(np.concatenate(([0], white, [0])))
         start, end = np.flatnonzero(edge == 1), np.flatnonzero(edge == -1)
         ok = end - start >= 2
-        if not ok.any():
+        start, end = start[ok], end[ok]
+        csum = np.concatenate(([0.0], np.cumsum(g[row - 2 : row + 3].mean(axis=0))))   # window means in O(1)
+        n = len(csum) - 1
+
+        def mean(a, b):
+            a, b = np.clip(a, 0, n), np.clip(b, 0, n)
+            return np.where(b > a, (csum[b] - csum[a]) / np.maximum(b - a, 1), np.nan)
+
+        k = np.clip(end - start, 3, self.side_px[row])
+        floor = np.fmax(mean(start - 2 * k, start - k), mean(end + k, end + 2 * k))   # brighter side
+        return start, end, mean(start, end) - floor
+
+    def _find_line(self, img, row, u_ref):
+        """Centre of the tape run (tape_runs) on this row closest to u_ref, or None."""
+        start, end, contrast = self.tape_runs(img, row)
+        tape = contrast >= MIN_CONTRAST                  # nan >= x: False
+        if not tape.any():
             return None
-        centres = (start[ok] + end[ok] - 1) / 2
+        centres = (start[tape] + end[tape] - 1) / 2
         return float(centres[np.argmin(np.abs(centres - u_ref))])
 
     def find_target(self, img):
         """Farthest band first, searched from the image centre, without touching u_prev. (L, y) or None."""
-        g = self.mask(img)
         points, target = [], None
         for dj, row, mj, wj in reversed(self.bands):
-            u = self._find_line(g, row, self.cu)
+            u = self._find_line(img, row, self.cu)
             if u is None:
                 continue
             y = -mj * (u - self.cu)
@@ -132,11 +155,10 @@ class LineFollower:
             self.memory = None
 
     def step(self, img, v_max, v_prev, w_prev):
-        g = self.mask(img)
         target, points = None, []
         for j in reversed(range(len(self.bands))):
             dj, row, mj, wj = self.bands[j]
-            u = self._find_line(g, row, self.u_prev[j])
+            u = self._find_line(img, row, self.u_prev[j])
             if u is None:
                 continue
             self.u_prev[j] = u
