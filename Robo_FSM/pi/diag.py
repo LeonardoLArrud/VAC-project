@@ -1,5 +1,5 @@
 """Checks on the real robot (Arduino with robo_fsm.ino).
-python3 diag.py [all] | camera | live | wheels | encoders | pi | speed | turn | sonar | odometry | camcal | nodecam | nodestop | nodegap | nodewhy | gridrecord [seconds]
+python3 diag.py [all] | camera | live | wheels | encoders | pi | speed | turn | sonar | odometry | camcal | nodecam | nodestop | nodegap | nodewhy | gridrecord [seconds] | loop [seconds]
 Distance to a node = odometry s + camera d. Calibrate them in this order:
   odometry  follows a straight line for 1 m by the encoders, you measure it: WHEEL_R
   camcal    robot still, a crossing at 3 distances you measure: H_CAM, TILT_deg, X_CAM (tape edges + widths in the image)
@@ -9,6 +9,7 @@ Distance to a node = odometry s + camera d. Calibrate them in this order:
 nodewhy: robot still before a node: what the bars and corners detectors see, and why they give no node
 gridrecord: free walk on the grid recording every camera image + log (recordings/), to tune the detectors offline
 sonar: sweeps the sonar servo right to left, distance at each angle: SONAR_SIGN
+loop: robot still, motors off: ms of each part of the FSM loop and the load of each CPU core (does it fit TIME_STEP?)
 """
 import csv
 import json
@@ -24,8 +25,8 @@ import cv2
 import numpy as np
 import serial
 
-from fsm import D_STOP, FSM, IDLE, NODES, TIME_STEP, look_for_node
-from line_follower import BANDS, H_CAM, K, LOST, THRESHOLD, TILT, X_CAM, LineFollower
+from fsm import D_STOP, FSM, IDLE, NODES, STAGES, TIME_STEP, LoopTimer, look_for_node
+from line_follower import BANDS, H_CAM, K, LOST, THRESHOLD, TILT, V0, X_CAM, LineFollower
 from navigators import SIDE, Navigator, OrderList
 from node_detector import ZONE, NodeDetector
 from params import PATH as PARAMS_PATH
@@ -720,6 +721,55 @@ def node_detector(f):
     return det
 
 
+def cpu_times():
+    """(busy, total) jiffies of each CPU core since boot, from /proc/stat (idle = idle + iowait)."""
+    with open("/proc/stat") as fh:
+        rows = [line.split() for line in fh if line.startswith("cpu") and line[3].isdigit()]
+    return [(sum(map(int, r[1:])) - int(r[4]) - int(r[5]), sum(map(int, r[1:]))) for r in rows]
+
+
+def loop(seconds=None):
+    """Cost of each part of the FSM loop on the Pi (python3 diag.py loop 20): robot still on a line before a
+    crossing, motors off. The same stages as fsm.main(): capture, node detectors (params.ini NODES, even with
+    MISSION = None), line follower ("fsm"), serial ("io"), live view (LIVE_VIEW). Then the load of each CPU core:
+    the corner detector runs in its own process, so its cost shows there, not in the stages."""
+    seconds = seconds or (float(sys.argv[2]) if len(sys.argv) > 2 else 20.0)
+    hw = RobotHardware(TIME_STEP)
+    f = LineFollower(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, TIME_STEP / 1000.0, V_MAX)
+    det = node_detector(f)
+    timer = LoopTimer()
+    input(f"Robot still on a line, a crossing 25-35 cm ahead; the motors stay off. Enter -> measures for {seconds:.0f} s")
+    cpu0, t_end = cpu_times(), time.monotonic() + seconds
+    try:
+        while hw.step() and time.monotonic() < t_end:
+            timer.start()
+            image, s = hw.camera_image(), hw.distance()
+            timer.lap("capture")
+            det.step(image, s, False)          # tracks the crossing (all the work), announces nothing
+            timer.lap("nodes")
+            f.points = []
+            f.step(image, V0, 0.0, 0.0)
+            timer.lap("fsm")
+            hw.set_wheels(0.0, 0.0)
+            timer.lap("io")
+            hw.show(f.points, f.cached_mask(image))
+            timer.lap("view")
+            timer.row()
+    except KeyboardInterrupt:
+        print("  stopped")
+    timer.report()
+    load = [100 * (b1 - b0) / max(t1 - t0, 1) for (b0, t0), (b1, t1) in zip(cpu0, cpu_times())]
+    print("[CPU]  " + ", ".join(f"core {i} {p:.0f}%" for i, p in enumerate(load)))
+    if timer.cycles:
+        busy = np.mean([c[1] for c in timer.cycles])
+        stage = dict(zip(STAGES, np.mean([c[2] for c in timer.cycles], axis=0)))
+        top = max(stage, key=stage.get)
+        print(f"  the loop works {busy:.0f} of {TIME_STEP} ms per cycle; heaviest stage: {top} ({stage[top]:.0f} ms)."
+              + (" Full: move it to another core or lighten it." if busy > 0.8 * TIME_STEP else
+                 f" Room left: TIME_STEP could go down to about {max(1.25 * busy, 33):.0f} ms"
+                 " (not below 33: the camera gives about 30 images/s)."))
+
+
 def nodegap(hw=None, nodes=4, v=0.15, max_metres=6.0):
     """Spacing between nodes: follows a straight grid line through several nodes, each one is placed with the
     odometry (s + d when it is announced). A camera bias is the same for every node and cancels in the
@@ -858,5 +908,5 @@ def summary(results):
 if __name__ == "__main__":
     modes = {"all": everything, "camera": camera, "live": live, "wheels": wheels, "encoders": encoders, "pi": pi,
              "speed": speed, "turn": turn, "sonar": sonar, "odometry": odometry, "camcal": camcal, "nodecam": nodecam,
-             "nodestop": nodestop, "nodegap": nodegap, "nodewhy": nodewhy, "gridrecord": gridrecord}
+             "nodestop": nodestop, "nodegap": nodegap, "nodewhy": nodewhy, "gridrecord": gridrecord, "loop": loop}
     modes[sys.argv[1] if len(sys.argv) > 1 else "all"]()

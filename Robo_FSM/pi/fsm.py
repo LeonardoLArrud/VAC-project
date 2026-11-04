@@ -2,6 +2,7 @@
 import csv
 import math
 import os
+import time
 from collections import deque
 
 from line_follower import LOST, OK, V0, K, LineFollower
@@ -237,6 +238,47 @@ class FSM:
         self.go(new, reason)
 
 
+STAGES = ("capture", "nodes", "fsm", "io", "view")   # parts of one loop cycle, timed by LoopTimer
+
+
+class LoopTimer:
+    """Where the loop time goes: ms of each stage of a cycle (fsm_log.csv) and a summary at exit.
+    period = start to start of two cycles (target TIME_STEP); busy = work in the cycle, without the wait for the tick."""
+
+    def __init__(self):
+        self.t = self.t_start = None
+        self.ms, self.cycles = {}, []      # cycles: (period, busy, ms of each stage)
+
+    def start(self):
+        now = time.perf_counter()
+        self.period = 1000 * (now - self.t_start) if self.t_start is not None else None
+        self.t_start = self.t = now
+        self.ms = dict.fromkeys(STAGES, 0.0)
+
+    def lap(self, stage):
+        now = time.perf_counter()
+        self.ms[stage] += 1000 * (now - self.t)
+        self.t = now
+
+    def row(self):
+        """[period, busy, stages...] in ms for the log; the cycle is kept for the summary."""
+        busy = sum(self.ms.values())
+        if self.period is not None:
+            self.cycles.append((self.period, busy, [self.ms[k] for k in STAGES]))
+        return ["" if self.period is None else f"{self.period:.1f}", f"{busy:.1f}"] + [f"{self.ms[k]:.1f}" for k in STAGES]
+
+    def report(self):
+        if not self.cycles:
+            return
+        period, busy, stages = zip(*self.cycles)
+        late = sum(p > 1.2 * TIME_STEP for p in period)
+        print(f"[LOOP] {len(period)} cycles: period mean {sum(period) / len(period):.0f} ms, max {max(period):.0f} ms "
+              f"(target {TIME_STEP} ms, {100 * late / len(period):.0f}% over +20%); "
+              f"busy mean {sum(busy) / len(busy):.0f} ms, max {max(busy):.0f} ms")
+        for k, ms in zip(STAGES, zip(*stages)):
+            print(f"[LOOP]   {k:8s} mean {sum(ms) / len(ms):5.1f} ms, max {max(ms):5.1f} ms")
+
+
 def look_for_node(detector, fsm, image, s):
     """detector.step(), except while the robot spins in place (the node being confirmed is dropped then);
     a node is announced only in FOLLOW."""
@@ -264,29 +306,40 @@ def main(hw, nav=Explorer):
     else:
         print("[FSM] no MISSION (test of the 8): follows the line and stops for obstacles; "
               "nodes and corners are not searched")
-    path =os.environ.get("FSM_LOG") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "fsm_log.csv")
-    with open(path, "w", newline="", buffering=1) as f:
-        log = csv.writer(f)
-        log.writerow(["t", "state", "v", "w", "dist", "line", "s", "node"])
-        while hw.step():
-            t, cmd = hw.time(), hw.command()
-            if AUTO_START is not None and not fsm.history and t >= AUTO_START:
-                cmd = cmd or MISSION or "START"
-            image, s = hw.camera_image(), hw.distance()
-            node = None                 # nodes are only used (announced) in FOLLOW, and only with a MISSION
-            if detector is not None:
-                node = look_for_node(detector, fsm, image, s)
-            if node:
-                print(f"[NODE] t={t:6.2f}s s={s:.3f} d={node[0]:.3f} exits={sorted(node[1])}")
-            fsm.follower.points = []
-            v, w = fsm.step(t, image, hw.obstacle_distance(), hw.heading(), cmd, s, node)
-            hw.set_wheels(v - K * w, v + K * w)
-            if hasattr(hw, "aim_sonar"):
-                hw.aim_sonar(fsm.aim)
-            if hasattr(hw, "show"):
-                hw.show(fsm.follower.points, fsm.follower.cached_mask(image))
-            log.writerow([f"{t:.3f}", fsm.state, f"{v:.4f}", f"{w:.4f}", f"{fsm.d:.3f}", fsm.line, f"{s:.3f}",
-                          f"{node[0]:.3f} {''.join(sorted(node[1]))}" if node else ""])
+    path = os.environ.get("FSM_LOG") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "fsm_log.csv")
+    timer = LoopTimer()
+    try:
+        with open(path, "w", newline="", buffering=1) as f:
+            log = csv.writer(f)
+            log.writerow(["t", "state", "v", "w", "dist", "line", "s", "node", "period_ms", "busy_ms"]
+                         + [f"{k}_ms" for k in STAGES])
+            while hw.step():
+                timer.start()
+                t, cmd = hw.time(), hw.command()
+                if AUTO_START is not None and not fsm.history and t >= AUTO_START:
+                    cmd = cmd or MISSION or "START"
+                image, s = hw.camera_image(), hw.distance()
+                timer.lap("capture")
+                node = None             # nodes are only used (announced) in FOLLOW, and only with a MISSION
+                if detector is not None:
+                    node = look_for_node(detector, fsm, image, s)
+                if node:
+                    print(f"[NODE] t={t:6.2f}s s={s:.3f} d={node[0]:.3f} exits={sorted(node[1])}")
+                timer.lap("nodes")
+                fsm.follower.points = []
+                v, w = fsm.step(t, image, hw.obstacle_distance(), hw.heading(), cmd, s, node)
+                timer.lap("fsm")
+                hw.set_wheels(v - K * w, v + K * w)
+                if hasattr(hw, "aim_sonar"):
+                    hw.aim_sonar(fsm.aim)
+                timer.lap("io")
+                if hasattr(hw, "show"):
+                    hw.show(fsm.follower.points, fsm.follower.cached_mask(image))
+                timer.lap("view")
+                log.writerow([f"{t:.3f}", fsm.state, f"{v:.4f}", f"{w:.4f}", f"{fsm.d:.3f}", fsm.line, f"{s:.3f}",
+                              f"{node[0]:.3f} {''.join(sorted(node[1]))}" if node else ""] + timer.row())
+    finally:                            # also on Ctrl+C: the summary is the point of a test drive
+        timer.report()
     return fsm
 
 
