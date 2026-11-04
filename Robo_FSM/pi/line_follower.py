@@ -13,6 +13,7 @@ TILT = math.radians(30)
 BANDS = [0.20, 0.26, 0.31, 0.36]
 K = 0.17
 V0 = 0.27
+GAIN = 1.0  # turn gain on the pure pursuit curvature: > 1 turns harder (as aiming nearer, L / sqrt(GAIN))
 TAU_EFF = 0.10
 A_LAT = 1.0
 A_UP = 0.5
@@ -153,7 +154,7 @@ class LineFollower:
 
         L, Y = target
         self.side = 1.0 if Y >= 0 else -1.0
-        c = 2 * Y / (L * L + Y * Y)
+        c = GAIN * 2 * Y / (L * L + Y * Y)
         v_target = min(V0, v_max, 0.163 * L / TAU_EFF, math.sqrt(A_LAT / max(abs(c), 1e-6)),
                        self.wheel_v_max / (1 + K * abs(c)))
         v = max(0.0, min(max(v_target, v_prev - A_DOWN * self.dt), v_prev + A_UP * self.dt))
