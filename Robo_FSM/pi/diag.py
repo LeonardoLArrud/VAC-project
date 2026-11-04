@@ -1,9 +1,10 @@
 """Checks on the real robot (Arduino with robo_fsm.ino).
-python3 diag.py [all] | camera | live | wheels | encoders | pi | speed | turn | odometry | nodecam | nodestop
+python3 diag.py [all] | camera | live | wheels | encoders | pi | speed | turn | odometry | nodecam | nodestop | nodegap
 Distance to a node = odometry s + camera d. Calibrate them in this order:
   odometry  follows a straight line for 1 m by the encoders, you measure it: WHEEL_R
   nodecam   robot still, a crossing at a distance you measure: TILT_deg
   nodestop  the whole chain: follows the line and stops on a node centre (as before a turn), you measure the error
+  nodegap   follows a grid line through several nodes: the spacing between nodes (last number of MISSION)
 """
 import math
 import sys
@@ -13,7 +14,7 @@ import cv2
 import numpy as np
 import serial
 
-from fsm import FOLLOW, FSM, IDLE, NODES, TIME_STEP
+from fsm import D_STOP, FOLLOW, FSM, IDLE, NODES, TIME_STEP
 from line_follower import H_CAM, K, LOST, THRESHOLD, TILT, X_CAM, LineFollower
 from navigators import OrderList
 from node_detector import ZONE, NodeDetector
@@ -297,14 +298,9 @@ def nodecam(cam=None, frames=20):
 
 def nodestop(hw=None):
     """The whole chain, with the FSM: follows the line, a node is announced, it stops on the node centre."""
-    from corner_detector import CornerDetector, NodeFusion
-
     hw = hw or RobotHardware(TIME_STEP)
     f = LineFollower(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, TIME_STEP / 1000.0, V_MAX)
-    det = NodeDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, f.mask)
-    if NODES != "bars":
-        corners = CornerDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV)
-        det = corners if NODES == "corners" else NodeFusion(det, corners)
+    det = node_detector(f)
     fsm = FSM(f, nav=lambda: OrderList(["STOP"]))      # stops at the first node, as it does before a turn
     input("Robot on a line, 0.8 to 1.5 m before a node. Enter -> follows the line and stops on the node centre")
     cmd, periods, t0 = "START", [], time.monotonic()
@@ -330,6 +326,62 @@ def nodestop(hw=None):
                       f"(cm, + = past the centre, - = before it): ") / 100
     print(f"  node position error: {100 * (est - real):+.1f} cm (> 0: the robot thinks it is further than it is)")
     print("  with WHEEL_R calibrated (odometry), this is the camera distance: correct TILT_deg with nodecam")
+
+
+def node_detector(f):
+    """The node detector of the FSM (params.ini NODES): bars, corners or both. f: the LineFollower (its mask)."""
+    det = NodeDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, f.mask)
+    if NODES != "bars":
+        from corner_detector import CornerDetector, NodeFusion
+
+        corners = CornerDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV)
+        det = corners if NODES == "corners" else NodeFusion(det, corners)
+    return det
+
+
+def nodegap(hw=None, nodes=4, v=0.15, max_metres=6.0):
+    """Spacing between nodes: follows a straight grid line through several nodes, each one is placed with the
+    odometry (s + d when it is announced). A camera bias is the same for every node and cancels in the
+    differences: only the odometry scale counts, so run odometry first."""
+    hw = hw or RobotHardware(TIME_STEP)
+    f = LineFollower(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, TIME_STEP / 1000.0, V_MAX)
+    det = node_detector(f)
+    input(f"Robot on a straight line of the grid, just before a node, with {nodes} nodes ahead and nothing on the "
+          f"line. Enter -> follows the line at {100 * v:.0f} cm/s and places the nodes (Ctrl+C to stop early)")
+    s0, vc, wc, found, periods, t = hw.distance(), 0.0, 0.0, [], [], time.monotonic()
+    try:
+        while hw.step() and len(found) < nodes and hw.distance() - s0 < max_metres:
+            periods.append(time.monotonic() - t)
+            t = time.monotonic()
+            image, s = hw.camera_image(), hw.distance()
+            node = det.step(image, s, True)
+            if node:
+                found.append(s + node[0])
+                gap = f", {100 * (found[-1] - found[-2]):.1f} cm after the previous one" if len(found) > 1 else ""
+                print(f"  node {len(found)} at {100 * (found[-1] - s0):.1f} cm (exits {''.join(sorted(node[1]))}){gap}")
+            if hw.obstacle_distance() < D_STOP:
+                print("  obstacle ahead: stopping")
+                break
+            out = f.step(image, v, vc, wc)
+            if out.status == LOST:
+                print("  line lost: stopping")
+                break
+            vc, wc = out.v, out.w
+            hw.set_wheels(vc - K * wc, vc + K * wc)
+    except KeyboardInterrupt:
+        print("  stopped")
+    settle(hw)
+    loop_report(periods)
+    gaps = np.diff(found)
+    if len(gaps) == 0:
+        print(f"  {len(found)} node(s) seen: at least 2 are needed (check the mask on the live view, /mask)")
+        return
+    g = float(np.median(gaps))
+    print(f"spacing: median {100 * g:.1f} cm, from {100 * gaps.min():.1f} to {100 * gaps.max():.1f} cm "
+          f"({len(gaps)} gap(s))")
+    print(f"MISSION (params.ini / params_entrega.ini): the last number = {g:.2f}   (m between nodes)")
+    if gaps.max() - gaps.min() > 0.10:
+        print("  the gaps differ by more than 10 cm: a node was missed or seen twice; look at the list and run again")
 
 
 NAMES = ("FR", "FL", "RR", "RL")
@@ -424,5 +476,6 @@ def summary(results):
 
 if __name__ == "__main__":
     modes = {"all": everything, "camera": camera, "live": live, "wheels": wheels, "encoders": encoders, "pi": pi,
-             "speed": speed, "turn": turn, "odometry": odometry, "nodecam": nodecam, "nodestop": nodestop}
+             "speed": speed, "turn": turn, "odometry": odometry, "nodecam": nodecam, "nodestop": nodestop,
+             "nodegap": nodegap}
     modes[sys.argv[1] if len(sys.argv) > 1 else "all"]()

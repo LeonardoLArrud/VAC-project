@@ -56,3 +56,6 @@ Python literals, angles with `_deg` are in degrees; a missing or misspelled name
   2. `python3 diag.py nodecam`: robot still, a crossing at 2-3 distances you measure (robot centre to tape middle): `TILT_deg`.
   3. `python3 diag.py nodestop`: follows the line and stops on a node centre with the FSM, you measure the error (cm).
      It also prints the loop period: well above `TIME_STEP`, the robot sees fewer images per node.
+  4. `python3 diag.py nodegap`: follows a straight grid line through several nodes and places each one with the
+     odometry: the spacing between nodes (the last number of `MISSION`). A camera bias cancels in the differences,
+     so only `WHEEL_R` (step 1) matters.
