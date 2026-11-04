@@ -1,11 +1,13 @@
 # Robo_FSM: FSM line follower on the real robot
 
-The Pi runs the FSM (IDLE, FOLLOW, WAIT, SEARCH, TURN) and the pure pursuit follower.
+The Pi runs the FSM (IDLE, FOLLOW, NODE, WAIT, SEARCH, TURN) and the pure pursuit follower.
+At each intersection (seen by `node_detector.py`) the navigator decides: `Explorer` (START, e.g. the 8:
+straight on) or `Mission` (`MISSION` in `params.ini`: goal on a grid, Dijkstra from `graph/` at every node).
 The Arduino only applies the PWM it receives and reports the ultrasound distance.
 
 | Folder | What it has |
 |---|---|
-| `pi/` | `fsm.py` (FSM and main loop), `line_follower.py`, `robot_hardware.py` (Pi Camera + serial) |
+| `pi/` | `fsm.py` (FSM and main loop), `line_follower.py`, `robot_hardware.py` (Pi Camera + serial), `navigators.py` and `node_detector.py` (same files as the Webots controller) |
 | `arduino/robo_fsm/` | `robo_fsm.ino` and the course files it uses (`Motor`, `MyServo`, `Parameters.h`) |
 
 ## Serial protocol (115200)
@@ -16,13 +18,23 @@ The Arduino only applies the PWM it receives and reports the ultrasound distance
 ## Run
 
 1. Upload `arduino/robo_fsm/robo_fsm.ino` (Bluno Mega 2560).
-2. Copy `pi/` to the Pi (needs `python3-picamera2`, `python3-serial`, `python3-opencv`, `numpy`).
-3. On the Pi: `python3 robot_hardware.py`. Starts 1 s after launch, Ctrl+C stops. Writes `fsm_log.csv`.
+2. Clone the repo on the Pi, or copy `pi/` and `graph/` next to it (`navigators.py` finds `graph/` going up).
+   Needs `python3-picamera2`, `python3-serial`, `python3-opencv`, `numpy`.
+3. In `pi/params.ini`, `[fsm]`: `MISSION = None` (8: Explorer) or e.g. `("MISSION", (0, 0), "E", (4, 3), 5, 0.50)`
+   (start node, heading, goal, nodes per side, m between nodes: measure the track).
+4. On the Pi: `python3 robot_hardware.py` (or `python3 fsm.py`). Starts 1 s after launch, Ctrl+C stops.
+   Writes `fsm_log.csv`; every intersection is printed as `[NODE] ... exits=[...]`.
 
 ## Before the first test
 
-- `robot_hardware.py`: `PORT`, `CAM_FOV` (62.2 deg for camera v2, 53.5 deg for v1.3), `PWM_MIN`, `V_MAX`.
-- `line_follower.py`: camera geometry `H_CAM`, `X_CAM`, `TILT`; `K`; `V0` (start low, e.g. 0.08); `THRESHOLD` for the lighting; `OPEN_W`, `OPEN_H` (filter against floor reflections, `FILTER = False` turns it off). Check it on `/mask` of the live view.
-- `USE_ENCODERS` in `robot_hardware.py`: True = per-wheel PI and heading from the encoders; False = open-loop PWM.
+All the parameters are in `pi/params.ini`, and only there (the .py files declare the names). Values are
+Python literals, angles with `_deg` are in degrees; a missing or misspelled name stops the program.
+
+- `[robot_hardware]`: `PORT`, `CAM_FOV_deg` (62.2 for camera v2, 53.5 for v1.3), `PWM_MIN`, `V_MAX`;
+  `USE_ENCODERS`: True = per-wheel PI and heading from the encoders, False = open-loop PWM.
+- `[line_follower]`: camera geometry `H_CAM`, `X_CAM`, `TILT_deg`; `K` (`python3 diag.py turn`); `V0` (start low,
+  e.g. 0.08) and `GAIN`; `THRESHOLD` for the lighting; `OPEN_W`, `OPEN_H` (filter against floor reflections,
+  `FILTER = False` turns it off). Check it on `/mask` of the live view.
+- `[fsm]`: `MISSION` (None = the 8 with Explorer), obstacle distances and times, turns.
 - Checks: `python3 diag.py encoders` (counts go up when each wheel turns forward), then `python3 diag.py pi` (robot suspended, each wheel near 0.10 m/s).
   PI gains `KP`, `KI` and feedforward `U0`, `KFF` at the top of `robo_fsm.ino`; `ENC_SIGN` flips an encoder that counts backwards.
