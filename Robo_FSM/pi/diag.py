@@ -852,7 +852,7 @@ def loop(seconds=None, hw=None, ask=True):
     det = node_detector(f)
     timer = LoopTimer()
     if ask:
-        input(f"Robot still on a line, a crossing 25-35 cm ahead; the motors stay off. Enter -> measures for "
+        input(f"Robot still on a line, a crossing 35-45 cm ahead; the motors stay off. Enter -> measures for "
               f"{seconds:.0f} s")
     cpu0, t_end = cpu_times(), time.monotonic() + seconds
     n_d0, t_d0 = getattr(hw, "n_d", None), time.monotonic()
@@ -1209,10 +1209,6 @@ class FullDiag:
                 print(f"{key}: {value}")
         for w in info["warnings"]:
             print(f"WARNING: {w}")
-        shutil.copytree(CODE_DIR, "code", ignore=shutil.ignore_patterns(
-            "recordings", "__pycache__", "*.jpg", "*.png", "*.csv", "*.zip", "*.tgz", "*.mp4"))
-        shutil.copy(PARAMS_PATH, "params_used.ini")
-        print("code copied to code/ and the params in use to params_used.ini")
         return info
 
     def check(self):
@@ -1311,7 +1307,7 @@ class FullDiag:
         out, rows = {}, []
         for key, text in SHAPES:
             while True:
-                answer = input(f"\nRobot still and square on the line, {text}, 25-35 cm ahead.\n"
+                answer = input(f"\nRobot still and square on the line, {text}, 35-45 cm ahead.\n"
                                f"  Distance robot centre -> middle of the crossing tape (cm; Enter = skip this shape): ")
                 answer = answer.strip().replace(",", ".")
                 try:
@@ -1461,8 +1457,8 @@ class FullDiag:
 
 FULL_STEPS = [   # (key, title, what to do, FullDiag method)
     ("system", "Pi, camera, power, code",
-     ("Nothing to do: reads the Pi state (power, temperature, memory, disk), the camera, the versions, and copies the "
-      "code and the params in use."), "system"),
+     ("Nothing to do: reads the Pi state (power, temperature, memory, disk), the camera and the versions."),
+     "system"),
     ("check", "Hardware check",
      ("Robot on the floor, the line a few cm to the LEFT of the robot centre. Halfway it asks you to LIFT the robot "
       "(wheels free) and to say which wheels turned."), "check"),
@@ -1482,10 +1478,10 @@ FULL_STEPS = [   # (key, title, what to do, FullDiag method)
       "Nothing to measure: the camera does it."), "turn_scale"),
     ("camcal", "Camera geometry (H_CAM, TILT, X_CAM)",
      ("Robot still and square on a straight line, a crossing ahead. Ruler for the lens height; tape for 3 distances "
-      "(23-35 cm) from the robot centre (midway between the axles) to the middle of the crossing tape."),
+      "(23-40 cm) from the robot centre (midway between the axles) to the middle of the crossing tape."),
      "camera_geometry"),
     ("shapes", "Node shapes, robot still",
-     ("In turn: a +, a T from its stem, a T from one arm, an L. Each 25-35 cm ahead, distance measured with the "
+     ("In turn: a +, a T from its stem, a T from one arm, an L. Each 35-45 cm ahead, distance measured with the "
       "tape. 15 images each, about 3 s."), "shapes"),
     ("nodestop", "Stop on the node centre",
      ("Robot on a line 0.8-1.5 m before a node. It drives, sees the node and stops on its centre; you measure where "
@@ -1493,7 +1489,7 @@ FULL_STEPS = [   # (key, title, what to do, FullDiag method)
     ("nodegap", "Spacing between nodes",
      "Robot on a straight grid line just before a node, with 4 nodes and nothing else ahead (about 4 m).", "gap"),
     ("loop", "Loop cost and CPU load",
-     "Robot still on a line, a crossing 25-35 cm ahead. Motors off. 2 x 20 s: with and without the live view.",
+     "Robot still on a line, a crossing 35-45 cm ahead. Motors off. 2 x 20 s: with and without the live view.",
      "loop_cost"),
     ("eight", "Drive the 8 (60 s, recorded)",
      ("Robot on the 8 track. It follows the line for 60 s and records every image. Once, put a box in its way on a "
@@ -1641,6 +1637,9 @@ def full():
                              d_heading=HEADINGS.get(d_heading, d_heading), d_goal=d_goal), m)
              for k, t, x, m in FULL_STEPS]
     session = FullDiag(folder)
+    shutil.copytree(CODE_DIR, "code", ignore=shutil.ignore_patterns(     # whatever the first step: the zip always
+        "recordings", "__pycache__", "*.jpg", "*.png", "*.csv", "*.zip", "*.tgz", "*.mp4"))   # says what ran
+    shutil.copy(PARAMS_PATH, "params_used.ini")
     print(f"FULL DIAGNOSIS: {len(steps)} steps, about 75 min. Everything is saved in {folder}\n"
           f"Follow the guide (testes_robo_pi.html). At each step: Enter = start, s = skip, q = finish now.\n"
           f"Ctrl+C during a step stops that step; at the Enter/s/q question it finishes the session.\n"
