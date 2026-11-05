@@ -16,8 +16,8 @@ from rich.text import Text
 
 HEADINGS = "ENWS"                   # navigators.Mission: E, N, W, S
 ARROW = {"E": "▶", "N": "▲", "W": "◀", "S": "▼"}
-CAR = "bold black on bright_green"      # the robot on the grid: a bright block, easy to spot
-GOAL = "bold white on bright_magenta"   # the destination
+CAR = "bold bright_green"           # the robot on the grid
+GOAL = "bold bright_yellow"         # the destination
 QUIT = "q"
 DEFAULT_N, DEFAULT_G = 5, 0.975     # nodes per side, m between node centres (the track)
 EDGE_S = 1.0                        # --fake: seconds to drive one edge
@@ -96,7 +96,7 @@ class DeliveryCli:
             self.goal, self.sent, self.t_goal = goal, False, time.monotonic()
             self.pending.put(("MISSION", self.node, self.heading, goal, self.n, self.g))
             self.say(Panel(grid_view(self.n, self.node, self.heading, goal),
-                           title=f"[{CAR}] {self.node} [/] → [{GOAL}] {goal} [/]", subtitle="q + Enter: stop", expand=False))
+                           title=f"[{CAR}]{self.node}[/] → [{GOAL}]{goal}[/]", subtitle="q + Enter: stop", expand=False))
         return True
 
     def input_loop(self):
