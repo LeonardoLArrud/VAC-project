@@ -50,6 +50,7 @@ from robot_hardware import (
     USE_ENCODERS,
     V_MAX,
     WHEEL_R,
+    D_RATE,
     SONAR_MAX,
     SONAR_SIGN,
     RobotHardware,
@@ -823,14 +824,14 @@ def bars_of(det):
 
 
 def serial_rate(hw, n0, t0):
-    """D lines per second read from the Arduino since (n0, t0); it sends 20. The Pi reads every line waiting at each
+    """D lines per second read from the Arduino since (n0, t0); it sends D_RATE. The Pi reads every line waiting at each
     cycle, so a slow loop does not lower it (its lines are only older: see the loop period). Fewer: lines lost or
     garbled on the link, or the Arduino rebooting (power)."""
     if n0 is None or not hasattr(hw, "n_d"):
         return None
     rate = (hw.n_d - n0) / max(time.monotonic() - t0, 1e-6)
-    print(f"[SERIAL] {rate:.1f} D lines/s from the Arduino (it sends 20)"
-          + ("" if rate >= 18 else ": lines lost or garbled, or the Arduino rebooted (cable, power?)"))
+    print(f"[SERIAL] {rate:.1f} D lines/s from the Arduino (it sends {D_RATE})"
+          + ("" if rate >= 0.9 * D_RATE else ": lines lost or garbled, or the Arduino rebooted (cable, power?)"))
     return rate
 
 

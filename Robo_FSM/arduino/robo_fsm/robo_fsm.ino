@@ -1,7 +1,7 @@
 // Arduino for the FSM on the Pi.
 // In:  S<left>,<right>  wheel speed in mm/s, per-wheel PI      M<left>,<right>  raw PWM -255..255      X  stop
 //      A<deg>  sonar servo at 90 + deg (0..180: the Pi limits it with params.ini SONAR_MAX_deg)
-// Out: D,<cm>,<nFR>,<nFL>,<nRR>,<nRL> every 50 ms  (cm: -1 = no echo, -2 = no signal; n = encoder counts)
+// Out: D,<cm>,<nFR>,<nFL>,<nRR>,<nRL> every 20 ms  (cm: -1 = no echo, -2 = no signal; n = encoder counts)
 // Stops the motors after 300 ms without S or M.
 
 #include "Motor.h"
@@ -11,7 +11,7 @@
 const int URM_ECHO = 2;
 const int SERVO_PIN = 26;
 const unsigned long TIMEOUT_MS = 300;
-const unsigned long PERIOD_D_MS = 50;
+const unsigned long PERIOD_D_MS = 20;   // faster than the Pi loop (40 ms): fresh odometry every cycle
 const unsigned long PERIOD_PI_MS = 20;
 const unsigned long VALID_US = 300000UL;
 const unsigned long STOPPED_US = 100000UL;

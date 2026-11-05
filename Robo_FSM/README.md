@@ -14,7 +14,7 @@ The Arduino only applies the PWM it receives and reports the ultrasound distance
 ## Serial protocol (115200)
 
 - Pi to Arduino: `S<left>,<right>` wheel speed in mm/s (per-wheel PI on the encoders), `M<left>,<right>` raw PWM -255..255, `X` stop. No command for 300 ms: motors stop.
-- Arduino to Pi: `D,<cm>,<nFR>,<nFL>,<nRR>,<nRL>` every 50 ms (cm: -1 = no echo, -2 = no signal; n = encoder counts).
+- Arduino to Pi: `D,<cm>,<nFR>,<nFL>,<nRR>,<nRL>` every 20 ms (`PERIOD_D_MS`, `D_RATE` on the Pi; cm: -1 = no echo, -2 = no signal; n = encoder counts).
 - Pi to Arduino: `A<deg>` sonar servo at 90 + deg (0..180; the Pi limits it with `SONAR_MAX_deg`).
 - The navigation (grid map, Dijkstra) runs only on the Pi (`navigators.py`).
 
@@ -27,7 +27,7 @@ odometry `s` of its image. At exit it prints `[NODES] ... images/s, ms each`: at
 about 25 images/s; much fewer and the robot sees fewer images per node. If that loop gets slow, the Pi reads the
 Arduino late and sends the wheel commands late; past 300 ms without a command the Arduino stops the motors (jerks).
 `python3 diag.py loop` and every recorded drive print the loop period (each cycle is that late) and warn about
-cycles over 300 ms; `[SERIAL] ... D lines/s` (20 expected) checks the link itself (lines lost, Arduino rebooting).
+cycles over 300 ms; `[SERIAL] ... D lines/s` (50 expected) checks the link itself (lines lost, Arduino rebooting).
 If the period shows trouble, give the serial link a core of its own: a separate process pinned with
 `os.sched_setaffinity`, or move the heavy detectors off the main core.
 

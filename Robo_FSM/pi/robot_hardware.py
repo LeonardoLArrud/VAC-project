@@ -12,6 +12,7 @@ from params import load
 PORT = CAM_WIDTH = CAM_HEIGHT = CAM_FOV = CAM_ROTATED_180 = USE_ENCODERS = None
 V_MAX = PWM_MIN = WHEEL_R = COUNTS_PER_REV = LIVE_VIEW = SONAR_SIGN = SONAR_MAX = None
 load("robot_hardware", globals())
+D_RATE = 50         # D, lines per second the Arduino sends: robo_fsm.ino PERIOD_D_MS = 20
 
 
 def sonar_degrees(angle):
@@ -28,7 +29,7 @@ class RobotHardware:
         self.sonar_deg = 0                 # servo offset last sent (robo_fsm.ino starts it straight ahead)
         self.counts = self.counts0 = None
         self.alive = False                 # a D, line arrived: the Arduino is up
-        self.n_d = 0                       # D, lines read so far (20 per second when the serial keeps up)
+        self.n_d = 0                       # D, lines read so far (D_RATE per second when the serial keeps up)
         self.cam = self._open_camera()
         self.stream = None
         if LIVE_VIEW:
