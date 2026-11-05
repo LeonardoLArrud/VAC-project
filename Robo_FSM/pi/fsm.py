@@ -7,7 +7,7 @@ from collections import deque
 
 from line_follower import A_UP, K, LOST, OK, V0, LineFollower
 from navigators import Explorer, Mission
-from node_detector import ZONE, NodeDetector
+from node_detector import ZONE, NodeProcess
 from params import load
 
 # values: params.ini [fsm]
@@ -316,7 +316,7 @@ def main(hw, nav=Explorer):
     fsm = FSM(LineFollower(width, height, fov, TIME_STEP / 1000.0, hw.wheel_v_max()), nav)
     detector = None                     # MISSION = None (test of the 8): line and obstacles only
     if MISSION is not None:             # grid mission: the intersections (nodes) are needed
-        detector = NodeDetector(width, height, fov, fsm.follower.grey)   # one grey image per frame
+        detector = NodeProcess(width, height, fov, fsm.follower.grey)    # another core; one grey image per frame
         if NODES != "bars":             # corner detection v4 (corner_detector.py): "+" crossings
             from corner_detector import CornerDetector, NodeFusion
             grey = fsm.follower.grey if fsm.follower.px_step == 1 else None

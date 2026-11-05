@@ -12,8 +12,13 @@ the tape is 2.5 cm wide everywhere and its corners are square):
    no tape (False), or not in view yet (None)
 step() adds up the arms over the images of one node: an exit is an arm seen as tape in 2 images or more, and more
 often than seen without. The node is announced at ZONE[0] ahead, its position averaged over its images.
+NodeProcess runs it in a process of its own (another core of the Pi 3), off the FSM loop.
 """
+import atexit
 import math
+import multiprocessing as mp
+import signal
+import time
 
 import cv2
 import numpy as np
@@ -214,3 +219,89 @@ class NodeDetector:
             return None
         self.why = f"crossing at {100 * d:.1f} cm, {self.shape}; {line_txt}"
         return d, arms
+
+
+def _serve(conn, buf, width, height, fov):
+    """The detector process: NodeDetector.step() on the grey image in buf for each (s, announce) received."""
+    signal.signal(signal.SIGINT, signal.SIG_IGN)   # Ctrl+C stops the FSM; this process ends with it
+    cv2.setNumThreads(1)                           # one core: the FSM loop keeps the others
+    grey = np.frombuffer(buf, np.uint8)
+    det = NodeDetector(width, height, fov, grey=lambda img: img)
+    conn.send(grey.size)                           # ready: imports done, maps built
+    while (job := conn.recv()) is not None:
+        if job == "forget":
+            det.forget()
+            continue
+        s, announce, shape = job
+        t0 = time.perf_counter()
+        node = det.step(grey.reshape(shape), s, announce)
+        conn.send((s, node, det.shape, det.why, 1000 * (time.perf_counter() - t0)))
+
+
+class NodeProcess:
+    """NodeDetector in a process of its own: on the Pi 3 it takes ~36 ms per image, more than half the FSM loop.
+    step() copies the grey image into shared memory for the process (when it is free) and returns the newest result:
+    one or two cycles late, so d is moved from the odometry s of its image to the s of this call. A node announced
+    while the FSM does not take one (announce=False) is kept until it does, as NodeDetector.step() would keep it.
+    shape and why: those of the last image done (diag.py logs them)."""
+
+    def __init__(self, width, height, fov, grey):
+        self.grey = grey
+        p = max(1, width // WIDTH)                 # the grey image size, as in NodeDetector
+        ctx = mp.get_context("spawn")              # a fresh interpreter: nothing of the camera is copied
+        self.buf = ctx.RawArray("B", (height // p) * (width // p))
+        self.conn, child = ctx.Pipe()
+        self.proc = ctx.Process(target=_serve, args=(child, self.buf, width, height, fov), daemon=True)
+        t0 = time.monotonic()
+        self.proc.start()
+        if not self.conn.poll(60.0):               # Pi 3: imports and maps take a few seconds
+            raise RuntimeError("node detector process not ready after 60 s")
+        self.conn.recv()
+        print(f"[NODES] detector process ready after {time.monotonic() - t0:.1f} s")
+        self.busy, self.forgotten, self.stale, self.pending = False, False, False, None
+        self.shape = self.why = ""
+        self.n, self.ms, self.t0 = 0, 0.0, time.monotonic()
+        atexit.register(self.close)
+
+    def step(self, image, s, announce=True):
+        try:
+            if self.busy and self.conn.poll():
+                s_img, node, self.shape, self.why, ms = self.conn.recv()
+                self.busy, self.n, self.ms = False, self.n + 1, self.ms + ms
+                if node and not self.stale:        # stale: its image is from before forget()
+                    self.pending = (s_img + node[0], node[1])
+                self.stale = False
+            if not self.busy:
+                grey = self.grey(image)
+                np.copyto(np.frombuffer(self.buf, np.uint8, grey.size).reshape(grey.shape), grey)
+                self.conn.send((s, announce, grey.shape))
+                self.busy, self.forgotten = True, False
+        except (EOFError, OSError) as e:
+            raise RuntimeError(f"node detector process stopped ({e!r}): its error, if any, is printed above") from e
+        if announce and self.pending:
+            (s_node, exits), self.pending = self.pending, None
+            return s_node - s, exits
+        return None
+
+    def forget(self):
+        """NodeDetector.forget() in the process, before its next image; drops a node kept for the FSM or found on
+        the image the process is still working on."""
+        self.pending, self.stale = None, self.busy
+        if not self.forgotten:
+            self.conn.send("forget")
+            self.forgotten = True
+
+    def close(self):
+        """Stop the process and print its speed. diag.py full makes several detectors: each would keep a process."""
+        if not self.proc.is_alive():
+            return
+        try:
+            self.conn.send(None)
+        except OSError:
+            pass
+        self.proc.join(timeout=2.0)
+        if self.proc.is_alive():
+            self.proc.terminate()
+        if self.n:
+            dt = time.monotonic() - self.t0
+            print(f"[NODES] {self.n} images in {dt:.0f} s ({self.n / dt:.1f}/s), {self.ms / self.n:.0f} ms each")

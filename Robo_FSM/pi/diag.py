@@ -39,7 +39,7 @@ import serial
 from fsm import D_SCAN, D_STOP, FSM, IDLE, MISSION, NODES, STAGES, TIME_STEP, TURN_TOL_Y, LoopTimer, look_for_node
 from line_follower import BANDS, GAIN, H_CAM, K, LOST, THRESHOLD, TILT, V0, X_CAM, LineFollower
 from navigators import SIDE, Explorer, Navigator, OrderList
-from node_detector import ZONE, NodeDetector
+from node_detector import ZONE, NodeDetector, NodeProcess
 from params import PATH as PARAMS_PATH
 from robot_hardware import (
     CAM_FOV,
@@ -793,7 +793,7 @@ def nodestop(hw=None):
 
 def node_detector(f):
     """The node detector of the FSM (params.ini NODES): bars, corners or both. f: the LineFollower (its grey)."""
-    det = NodeDetector(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, f.grey)
+    det = NodeProcess(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, f.grey)
     if NODES != "bars":
         from corner_detector import CornerDetector, NodeFusion
 
@@ -807,7 +807,7 @@ _detectors = []     # made by node_detector() and not closed yet
 
 
 def close_detectors():
-    """Stop the corner detection process of every detector node_detector() made (diag.py full, after each step:
+    """Stop the detection processes of every detector node_detector() made (diag.py full, after each step:
     otherwise each step would leave one process running)."""
     while _detectors:
         det = _detectors.pop()
@@ -816,10 +816,10 @@ def close_detectors():
 
 
 def bars_of(det):
-    """The NodeDetector (bars) inside det, for its shape and why, or None (NODES = "corners")."""
-    if isinstance(det, NodeDetector):
+    """The NodeProcess (bars) inside det, for its shape and why, or None (NODES = "corners")."""
+    if isinstance(det, NodeProcess):
         return det
-    return next((d for d in getattr(det, "detectors", ()) if isinstance(d, NodeDetector)), None)
+    return next((d for d in getattr(det, "detectors", ()) if isinstance(d, NodeProcess)), None)
 
 
 def serial_rate(hw, n0, t0):
@@ -845,7 +845,7 @@ def loop(seconds=None, hw=None, ask=True):
     """Cost of each part of the FSM loop on the Pi (python3 diag.py loop 20): robot still on a line before a
     crossing, motors off. The same stages as fsm.main(): capture, node detectors (params.ini NODES, even with
     MISSION = None), line follower ("fsm"), serial ("io"), live view (LIVE_VIEW). Then the load of each CPU core:
-    the corner detector runs in its own process, so its cost shows there, not in the stages."""
+    the node detector runs in its own process, so its cost shows there (and in [NODES]), not in the stages."""
     seconds = seconds or (float(sys.argv[2]) if len(sys.argv) > 2 else 20.0)
     hw = hw or RobotHardware(TIME_STEP)
     f = LineFollower(CAM_WIDTH, CAM_HEIGHT, CAM_FOV, TIME_STEP / 1000.0, V_MAX)

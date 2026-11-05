@@ -20,8 +20,11 @@ The Arduino only applies the PWM it receives and reports the ultrasound distance
 
 ## Performance note: a core for the Arduino link?
 
-The serial link to the Arduino runs in the main loop, in the same process as the camera, the line follower and the
-bar node detector (the corner detector already has its own process). If that loop gets slow, the Pi reads the
+The serial link to the Arduino runs in the main loop, in the same process as the camera and the line follower. The
+node detector (~36 ms per image on the Pi 3) runs in a process of its own (`NodeProcess` in `node_detector.py`): the
+loop copies each grey image to it through shared memory and gets the result one or two cycles later, placed with the
+odometry `s` of its image. At exit it prints `[NODES] ... images/s, ms each`: at `TIME_STEP` 40 ms it should do
+about 25 images/s; much fewer and the robot sees fewer images per node. If that loop gets slow, the Pi reads the
 Arduino late and sends the wheel commands late; past 300 ms without a command the Arduino stops the motors (jerks).
 `python3 diag.py loop` and every recorded drive print the loop period (each cycle is that late) and warn about
 cycles over 300 ms; `[SERIAL] ... D lines/s` (20 expected) checks the link itself (lines lost, Arduino rebooting).
@@ -58,7 +61,7 @@ Python literals, angles with `_deg` are in degrees; a missing or misspelled name
   (`node_detector.py`), `"corners"` (`corner_detector.py`) or `"both"`.
 - `[corner_detector]`: the corner detection v4 of `TP-dev-emb/TP_Dev_Emb/corner_detection_v4.py` (a "+" crossing =
   3 or 4 concave corners, exits S, L, R; T and L nodes are left to the bars). Its px sizes are the v4 ones at 1280 px,
-  scaled to `CAM_WIDTH`. `PARALLEL = "process"` runs it on another core of the Pi 3 so the 64 ms loop is not slowed;
+  scaled to `CAM_WIDTH`. `PARALLEL = "process"` runs it on another core of the Pi 3 so the FSM loop is not slowed;
   at exit it prints `[CORNERS] ... images/s, ms each`: it needs about 5 images/s or more at `V0 = 0.25`.
 - Checks: `python3 diag.py encoders` (counts go up when each wheel turns forward), then `python3 diag.py pi` (robot suspended, each wheel near 0.10 m/s).
   PI gains `KP`, `KI` and feedforward `U0`, `KFF` at the top of `robo_fsm.ino`; `ENC_SIGN` flips an encoder that counts backwards.
