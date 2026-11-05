@@ -1,4 +1,5 @@
 """cli.py without the robot: a fake FSM, the real navigators.Mission, no camera or serial."""
+import io
 import os
 import sys
 import unittest
@@ -8,7 +9,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 from rich.console import Console  # noqa: E402
 
-from cli import FakeFsm, DeliveryCli, cli_hardware, grid_view, ini_value, parse_node, run_params, with_value  # noqa: E402,E501
+from cli import (FakeFsm, DeliveryCli, LivePreview, cli_hardware, grid_view, ini_value,  # noqa: E402
+                 parse_node, run_params, snapshot, with_value)
 from navigators import Mission  # noqa: E402
 
 
@@ -172,6 +174,71 @@ class TestFakeFsm(unittest.TestCase):
         self.assertEqual(fsm.state, "IDLE")
         cli.command()                   # the CLI notices the arrival
         self.assertEqual(cli.deliveries[0][:2], ((2, 0), "arrived"))
+
+
+class TestLivePreview(unittest.TestCase):
+    def render(self, renderable):
+        console = Console(record=True, width=80)
+        console.print(renderable)
+        return console.export_text()
+
+    def run_fake(self, fake, cmd, until, t=0.0, dt=0.25):
+        """Steps the fake robot (one 'cycle' every dt s) until until(fake) or 200 cycles."""
+        fake.step(cmd, t)
+        for _ in range(200):
+            if until(fake):
+                return t
+            t += dt
+            fake.step(None, t)
+        self.fail("the fake robot never got there")
+
+    def test_grid_draws_path_and_blocked_edges(self):
+        text = self.render(grid_view(5, (0, 0), "E", (2, 2), path=[(0, 0), (1, 0), (1, 1)],
+                                     blocked=[((1, 0), (2, 0))]))
+        self.assertIn("━━━", text)      # (0, 0)-(1, 0) on the path
+        self.assertIn("┃", text)        # (1, 0)-(1, 1) on the path
+        self.assertIn("✗", text)        # (1, 0)-(2, 0) blocked
+
+    def test_snapshot_follows_the_mission_path(self):
+        nav = Mission((0, 0), "E", (2, 0), 5, 1.0)
+        nav.on_node(None, 0.0)
+        node, heading, to, path, blocked, replanning = snapshot(nav, 5)
+        self.assertEqual((node, heading, to, path, replanning), ((0, 0), "E", (1, 0), ((0, 0), (1, 0), (2, 0)), False))
+
+    def test_fake_obstacle_is_found_replanned_and_shown_at_once(self):
+        fake = FakeFsm(quiet=True)
+        fake.obstacles.add(frozenset(((1, 0), (2, 0))))
+        cmd = ("MISSION", (0, 0), "E", (2, 0), 5, 1.0)
+        self.run_fake(fake, cmd, lambda f: f.nav.closed)          # it drives into the obstacle
+        node, heading, to, path, blocked, replanning = snapshot(fake.nav, 5)
+        self.assertEqual(blocked, (((1, 0), (2, 0)),))
+        self.assertTrue(replanning)                                # Mission's path is empty until the node...
+        self.assertEqual((node, heading), ((1, 0), "W"))           # ...turned back towards (1, 0)
+        self.assertEqual((path[0], path[-1]), ((1, 0), (2, 0)))    # ...but the new path is already shown
+        self.assertNotIn(((1, 0), (2, 0)), list(zip(path, path[1:])))
+        self.run_fake(fake, None, lambda f: f.state == "IDLE")
+        self.assertEqual(fake.nav.node, (2, 0))                    # arrived around the obstacle
+
+    def test_block_command(self):
+        added = []
+        cli = DeliveryCli((0, 0), "E", 5, 1.0, ask=None, say=lambda *a: None, on_block=added.append)
+        cli.handle("block 1 0 2 0")
+        cli.handle("block 0 0 2 2")                                # not neighbors: refused
+        self.assertEqual(added, [frozenset(((1, 0), (2, 0)))])
+
+    def test_panel_thread_draws_then_hands_back_the_prompt(self):
+        out = io.StringIO()
+        live = LivePreview(5, out=Console(file=out, width=80))
+        nav = Mission((0, 0), "E", (2, 0), 5, 1.0)
+        nav.on_node(None, 0.0)
+        live.start((0, 0), (2, 0))
+        self.assertFalse(live.idle.is_set())                       # panel on: no prompt
+        live.watch(nav)
+        live.watch(nav)                                            # nothing changed: not queued again
+        self.assertLessEqual(live.events.qsize(), 2)
+        live.end("arrived")
+        self.assertTrue(live.idle.wait(2.0))                       # panel off: prompt again
+        self.assertIn("arrived", out.getvalue())
 
 
 if __name__ == "__main__":

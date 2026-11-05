@@ -48,11 +48,16 @@ If the period shows trouble, give the serial link a core of its own: a separate 
    the heading for **this run only** (Enter keeps the value from `params.ini`; the file is not changed: the run uses a
    temporary copy through `ROBO_PARAMS`). Grid size and spacing come from `MISSION` (its goal is ignored), or 5 and 0.975 m.
    rich only prints at events (new destination, arrival), not in the loop: the 64 ms loop is not slowed.
+   `--lp` (live preview, also with `--fake` and in Webots): while it drives, one panel is redrawn in place with the
+   Dijkstra path, the edges blocked by obstacles (✗) and the car; after an obstacle the new path shows at once.
+   While driving only `q` works, alone (no Enter); the prompt comes back at the goal. In `--fake`,
+   `block x1 y1 x2 y2` puts a hidden obstacle on an edge, to see the replanning.
    Before the Pi, on a PC (a Python with `rich`, plus `numpy` and `opencv` for Webots):
    - `python3 cli.py --fake`: a fake robot (no camera, no serial) moves along the real `Mission` path, 1 s per edge.
    - Webots, real FSM on the 5x5 grid: open `worlds/grid_5x5_extern.wbt`, then from `controllers/fsm/` run
      `WEBOTS_HOME=/Applications/Webots.app $WEBOTS_HOME/Contents/MacOS/webots-controller --robot-name=Cherokey_4W_v3 cli_webots.py`
-     (see `cli_webots.py`; the `python3` first in PATH is the one used).
+     (see `cli_webots.py`; the `python3` first in PATH is the one used). It also starts the world's `grid_pose`
+     supervisor: Webots runs the simulation only once every extern robot is connected. Reset (⟲) and ▶ before each run.
 
 ## Before the first test
 
