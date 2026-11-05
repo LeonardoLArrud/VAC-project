@@ -84,13 +84,24 @@ def preview_path(nav, n):
     return [tuple(nav.node)] + path if path and tuple(nav.node) != tuple(nav.to) else path
 
 
+def still_blocked(nav, n):
+    """The edges of nav.closed the map still blocks: they expire after Mission's t_block, and a boxed-in robot
+    forgets them all; nav.closed keeps the history."""
+    def grid_id(xy):                    # (x, y) -> graph.track (row, col), as Mission._id
+        return n - 1 - xy[1], xy[0]
+    return {tuple(sorted(map(tuple, e))) for e in nav.closed if nav.map.is_blocked(grid_id(e[0]), grid_id(e[1]))}
+
+
 def snapshot(nav, n):
-    """What the live panel shows, read from the Mission: (node, heading, next, path, blocked edges, replanning)."""
+    """What the live panel shows, read from the Mission: (node, heading, next, path, blocked edges, replanning).
+    Replanning: Mission's path is empty (after an obstacle, until the node behind) or stops short of the goal
+    (the sonar saw an obstacle beyond the next node: on_seen keeps only [node, next]). Then the path it will take
+    from the next node is shown at once."""
     path, replanning = [tuple(p) for p in nav.path], False
-    if not path:
+    if not path or path[-1] != tuple(nav.goal):
         path, replanning = preview_path(nav, n), True
-    blocked = tuple(sorted(tuple(sorted(map(tuple, e))) for e in nav.closed))
-    return tuple(nav.node), HEADINGS[nav.h], tuple(nav.to), tuple(path), blocked, replanning
+    return (tuple(nav.node), HEADINGS[nav.h], tuple(nav.to), tuple(path), tuple(sorted(still_blocked(nav, n))),
+            replanning)
 
 
 def live_panel(n, start, goal, snap):
@@ -128,7 +139,7 @@ class LivePreview:
         self.events.put(("start", None))
 
     def watch(self, nav):               # robot loop, every cycle of a delivery: cheap unless it changed
-        key = (nav.node, nav.to, nav.h, len(nav.path), len(nav.closed))
+        key = (nav.node, nav.to, nav.h, len(nav.path), len(nav.closed), len(still_blocked(nav, self.n)))
         if key != self.key:
             self.key = key
             self.events.put(("update", snapshot(nav, self.n)))

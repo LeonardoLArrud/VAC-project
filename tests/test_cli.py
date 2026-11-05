@@ -11,7 +11,7 @@ from rich.console import Console  # noqa: E402
 
 from cli import (FakeFsm, DeliveryCli, LivePreview, cli_hardware, grid_view, ini_value,  # noqa: E402
                  parse_node, run_params, snapshot, with_value)
-from navigators import Mission  # noqa: E402
+from navigators import SEEN_MARGIN, Mission  # noqa: E402
 
 
 def quiet_cli(start=(0, 0), heading="E", n=5, g=1.0):
@@ -218,6 +218,29 @@ class TestLivePreview(unittest.TestCase):
         self.assertNotIn(((1, 0), (2, 0)), list(zip(path, path[1:])))
         self.run_fake(fake, None, lambda f: f.state == "IDLE")
         self.assertEqual(fake.nav.node, (2, 0))                    # arrived around the obstacle
+
+    def test_sonar_look_ahead_shows_the_new_path_at_once(self):
+        nav = Mission((0, 0), "E", (3, 0), 5, 1.0)
+        nav.on_node(None, 0.0)                          # plan (0,0) (1,0) (2,0) (3,0), driving to (1, 0)
+        s = 0.5                                         # halfway to (1, 0); the echo is beyond it, on (1,0)-(2,0)
+        self.assertIsNotNone(nav.on_seen(s, nav.s_next + nav.g / 2 - s))
+        self.assertEqual(nav.path, [(0, 0), (1, 0)])    # Mission cut its plan down to the next node
+        node, heading, to, path, blocked, replanning = snapshot(nav, 5)
+        self.assertTrue(replanning)
+        self.assertEqual(path[:2], ((0, 0), (1, 0)))    # the panel shows where it goes from (1, 0) already
+        self.assertEqual(path[-1], (3, 0))
+        self.assertNotIn(((1, 0), (2, 0)), list(zip(path, path[1:])))
+        self.assertEqual(blocked, (((1, 0), (2, 0)),))
+        self.assertLess(SEEN_MARGIN, nav.g / 2)        # (the echo above was inside the edge, as on_seen wants)
+
+    def test_expired_obstacles_are_no_longer_drawn(self):
+        nav = Mission((0, 0), "E", (2, 0), 5, 1.0, t_block=30)
+        nav.on_node(None, 0.0)
+        nav.on_blocked(0.25, 0.30)                      # obstacle on (0,0)-(1,0)
+        self.assertEqual(snapshot(nav, 5)[4], (((0, 0), (1, 0)),))
+        nav.map.clock = lambda: 1e12                    # 30 s later (and more)
+        self.assertEqual(snapshot(nav, 5)[4], ())       # still in nav.closed, but free again: no ✗
+        self.assertTrue(nav.closed)
 
     def test_block_command(self):
         added = []
