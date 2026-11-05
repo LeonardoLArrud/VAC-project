@@ -204,12 +204,13 @@ def ask_start(n):
     return start, heading
 
 
-def start_cli(start, heading, n, g):
-    """Header, start view and the keyboard thread. Returns the DeliveryCli the robot loop polls."""
+def start_cli(start, heading, n, g, cli=None):
+    """Header, start view and the keyboard thread. Returns the DeliveryCli the robot loop polls
+    (cli: an existing one, e.g. already wired to the hardware)."""
     console.print(Panel("[bold]ST5 Troller: deliveries on the grid[/]\n"
                         "x right, y up, (0, 0) bottom-left. Type a destination, Enter; q to quit.",
                         border_style="cyan", expand=False))
-    cli = DeliveryCli(start, heading, n, g)
+    cli = cli or DeliveryCli(start, heading, n, g)
     console.print(Panel(grid_view(n, cli.node, cli.heading), title=f"[bold]start {cli.node}, facing {heading}[/]",
                         expand=False))
     threading.Thread(target=cli.input_loop, daemon=True).start()

@@ -28,9 +28,15 @@ START, HEADING, N, G = (0, 0), "E", 5, 0.50     # grid_5x5*.wbt (worlds/make_gri
 
 def main():
     fsm.AUTO_START = None                       # no START at 1 s: the CLI gives the missions
-    cli = start_cli(START, HEADING, N, G)
+    cli = cli_module.DeliveryCli(START, HEADING, N, G)
+    # Connect to Webots first: the robot is created here, and this waits until Webots offers it.
+    with console.status("connecting to Webots (robot Cherokey_4W_v3, world grid_5x5_extern.wbt). Stuck here? "
+                        "In Webots: reset the simulation (⟲), then press ▶"):
+        hw = cli_hardware(WebotsHardware, cli)(fsm.TIME_STEP)
+    console.print("[green]connected to Webots[/]")
+    start_cli(START, HEADING, N, G, cli)
     try:
-        fsm.main(cli_hardware(WebotsHardware, cli)(fsm.TIME_STEP), live_view=False)
+        fsm.main(hw, live_view=False)
     except KeyboardInterrupt:
         console.print("\nstopped (Ctrl+C)")
     console.print(cli.summary())
