@@ -5,17 +5,17 @@ import os
 import time
 from collections import deque
 
-from line_follower import LOST, OK, V0, K, LineFollower
+from line_follower import A_UP, K, LOST, OK, V0, LineFollower
 from navigators import Explorer, Mission
 from node_detector import ZONE, NodeDetector
 from params import load
 
 # values: params.ini [fsm]
 MISSION = AUTO_START = TIME_STEP = None
-D_STOP = D_SLOW = SLOW_FRACTION = T_STATIC = T_MIN = N_OK = None
+D_STOP = D_SLOW = SLOW_FRACTION = T_STATIC = T_STALL = T_BLOCK = T_MIN = N_OK = None
 SEARCH_RATE = TURN_RATE = TURN_EARLY = TURN_LATE = TURN_TOL_Y = None
-V_NODE = K_HOLD = D_STRAIGHT = PRIOR_TOL = NODES = None
-D_BRAKE = V_CREEP = NODE_TOL = T_SETTLE = T_SCAN = D_SCAN = None
+A_BRAKE = WHEEL_LAG = K_HOLD = D_STRAIGHT = NODES = None
+V_CREEP = NODE_TOL = T_SETTLE = T_SCAN = D_SCAN = None
 load("fsm", globals())
 D_SEE = ZONE[0]                     # nodes are announced at the start of the detector zone
 TURNS = {"LEFT": math.pi / 2, "RIGHT": -math.pi / 2, "U_TURN": math.pi}
@@ -24,6 +24,9 @@ IDLE, FOLLOW, NODE, ALIGN, WAIT, SEARCH, TURN = "IDLE", "FOLLOW", "NODE", "ALIGN
 CHECK = "CHECK"                     # turn done at a node: still, the sonar reads the exit ahead
 SPINNING = (TURN, SEARCH, CHECK)    # in place: s does not move, so anything seen would confirm as a node
 HEADING = {"STRAIGHT": 0.0, **TURNS}   # direction of each order from the arrival heading
+SONAR_FAR = 1.5                     # m: farthest sonar echo trusted to place an obstacle on the map (wall: 1.75)
+STALL_V, STALL_W = 0.03, 0.3        # commands above these (m/s, rad/s) must move the wheels...
+STALL_DS, STALL_DH = 0.001, 0.01    # ...by at least this much per cycle (m, rad); else T_STALL ends the run
 
 
 class FSM:
@@ -39,15 +42,22 @@ class FSM:
         self.order, self.why, self.node_event, self.exits = "STOP", "", None, None
         self.aim, self.check_exit = 0.0, False   # sonar direction (rad, + = left); the turn ends at a node exit
         self.ds, self.t_still, self.t_stop, self.fix, self.fixed, self.t_fix_end = 0.0, 0.0, 0.0, 0, False, 0.0   # ALIGN
+        self.t_moved = 0.0                  # last time the wheels did what was commanded (stall check)
 
     def step(self, t, image, dist, heading, cmd, s=0.0, node=None):
         self.ds = s - self.s                # distance moved since the last cycle (ALIGN: are the wheels still?)
+        moved = abs(self.ds) > STALL_DS or abs(heading - self.heading) > STALL_DH
+        if moved or (abs(self.v) < STALL_V and abs(self.w) < STALL_W):
+            self.t_moved = t                # the last command moved the robot, or asked for no motion
         self.t, self.heading, self.s, self.node_event = t, heading, s, node
         self.dists.append(dist)
         self.d = sorted(self.dists)[len(self.dists) // 2]
         self.aim = 0.0                      # straight ahead, unless the state says otherwise
         if cmd == "STOP" and self.state != IDLE:
             self.go(IDLE, "STOP command")
+        elif self.state != IDLE and t - self.t_moved > T_STALL:   # the logs showed it: FOLLOW for 12 s, standing still
+            self.go(IDLE, f"STALL: motion commanded for {T_STALL:.1f} s but the wheels do not turn "
+                          "(motor battery switched on late or flat? wheels blocked?)")
         elif self.state in (FOLLOW, NODE) and self.d < D_STOP:
             self.saved = self.state
             self.go(WAIT, f"obstacle at {self.d:.2f} m")
@@ -82,7 +92,7 @@ class FSM:
             self.nav = self.make_nav()
             self.go(FOLLOW, "START command")
         elif isinstance(cmd, tuple) and cmd[0] == "MISSION":
-            self.nav = Mission(*cmd[1:])
+            self.nav = Mission(*cmd[1:], t_block=T_BLOCK)
             self.node_ahead(self.s, None, f"MISSION {cmd[1:]}")
         return 0.0, 0.0
 
@@ -90,16 +100,22 @@ class FSM:
         out = self.follower.step(image, self.v_max(), self.v, self.w)
         self.line, self.side = out.status, out.side
         self.aim = out.c * D_SLOW / 2       # sonar on the point D_SLOW ahead along the curve the robot is on
-        prior = self.nav.prior()
-        if self.node_event:
-            d, exits = self.node_event
-            if prior and abs(self.s + d - prior[0]) > PRIOR_TOL:
-                print(f"[FSM] t={self.t:6.2f}s false node at {d:.2f} m ignored")
+        prior = self.nav.prior()            # mission: where the map puts the next node (s) and its exits
+        if prior and self.d < SONAR_FAR and abs(self.aim) < 0.1:   # the sonar looks along the line: an obstacle
+            seen = self.nav.on_seen(self.s, self.d)                 # beyond the next node changes the plan now
+            if seen:
+                print(f"[FSM] t={self.t:6.2f}s {seen}")
+        half = self.nav.g / 2 if prior else 0.0   # any node within half a spacing of it is that node: the detector
+        if self.node_event:                 # says what is a node, the odometry only which one (wheel slip, a bad
+            d, exits = self.node_event      # start or the camera error doubled by a U-turn stay well inside)
+            if prior and abs(self.s + d - prior[0]) > half:
+                print(f"[FSM] t={self.t:6.2f}s node at {d:.2f} m ignored: {self.s + d - prior[0]:+.2f} m from the "
+                      f"next node of the map")
             else:
                 aim = math.atan2(out.target[1], out.target[0]) if out.target else 0.0
                 self.node_ahead(self.s + d, exits, f"node at {d:.2f} m, exits {''.join(sorted(exits))}", aim)
                 return out.v, out.w
-        elif prior and self.s > prior[0] - D_SEE + PRIOR_TOL:   # should have been seen by now
+        elif prior and self.s > prior[0] + half - D_SEE:   # even a node half a spacing late would be seen by now
             order, why = self.nav.on_fault("node missed")
             print(f"[FSM] t={self.t:6.2f}s {why}")
             if order == "STOP":
@@ -111,7 +127,8 @@ class FSM:
         return out.v, out.w
 
     def node(self, image, cmd):
-        """To the node centre, keeping the heading. Turns: slower over the last D_BRAKE, then ALIGN (stop) at the centre."""
+        """To the node centre, keeping the heading. Straight on: full speed. A turn: full speed, then braking at A_BRAKE
+        so that it reaches the centre at V_CREEP, then ALIGN (stop) there."""
         if self.order == "STRAIGHT" and self.s >= self.s_node - D_STRAIGHT:
             self.go(FOLLOW, "bar passed")
         elif self.order != "STRAIGHT" and self.s >= self.s_node:
@@ -121,9 +138,10 @@ class FSM:
             else:
                 self.go(IDLE, f"{self.order} at the node: {self.why}")
         else:
-            v = V_NODE
-            if self.order != "STRAIGHT":    # arrive slowly, so it stops on the centre
-                v = V_CREEP + (V_NODE - V_CREEP) * min(1.0, (self.s_node - self.s) / D_BRAKE)
+            v = min(V0, self.v + A_UP * TIME_STEP / 1000)   # straight on: no reason to slow down
+            if self.order != "STRAIGHT":    # a turn: the fastest speed that can still stop on the centre, the wheels
+                left = self.s_node - self.s - self.v * WHEEL_LAG   # going on at this speed for WHEEL_LAG first
+                v = min(v, math.sqrt(V_CREEP ** 2 + 2 * A_BRAKE * max(0.0, left)))
             return min(v, self.v_max()), K_HOLD * (self.psi_ref - self.heading)
         return 0.0, 0.0
 

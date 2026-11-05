@@ -32,6 +32,9 @@ If the period shows trouble, give the serial link a core of its own: a separate 
 
 1. Upload `arduino/robo_fsm/robo_fsm.ino` (Bluno Mega 2560).
 2. Copy `Robo_FSM/` to the Pi (`navigators.py` finds `Robo_FSM/graph/` going up from `pi/`).
+   **Switch the motor battery on before starting any program.** Started without it, the wheel PI drives full PWM
+   into still wheels, and when the battery comes on the surge drops it. The FSM stops after `T_STALL` (1 s) of
+   commanded motion without wheel motion (`STALL` in the terminal): restart the program then.
    Needs `python3-picamera2`, `python3-serial`, `python3-opencv`, `numpy`.
 3. In `pi/params.ini`, `[fsm]`: `MISSION = None` (test of the 8: it follows the line and stops for obstacles,
    **no node and no corner detection**) or e.g. `("MISSION", (0, 0), "E", (4, 3), 5, 0.50)`
