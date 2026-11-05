@@ -1,12 +1,6 @@
-"""Deliveries on the grid, chosen while the robot runs: type a destination, the robot drives there, then type the
-next one, and so on until q. Run on the Pi: python3 cli.py (needs rich: pip install rich).
-
-The FSM and the navigation do not change: this only sends ("MISSION", ...) commands through hw.command() and
-watches the FSM (hw.attach) to know when a delivery ends. rich prints only at events (new destination, arrival),
-never in every cycle of the loop, so the 64 ms loop is not slowed.
-"""
 import queue
 import re
+import sys
 import threading
 import time
 
@@ -20,6 +14,7 @@ HEADINGS = "ENWS"                   # navigators.Mission: E, N, W, S
 ARROW = {"E": "▶", "N": "▲", "W": "◀", "S": "▼"}
 QUIT = "q"
 DEFAULT_N, DEFAULT_G = 5, 0.975     # nodes per side, m between node centres (the track)
+EDGE_S = 1.0                        # --fake: seconds to drive one edge
 
 console = Console()
 
@@ -149,27 +144,54 @@ class DeliveryCli:
         return table
 
 
-class CliHardware:
-    """The robot's hardware, with the commands coming from the CLI. Everything else is RobotHardware's."""
+def cli_hardware(base, cli):
+    """The robot's hardware class (RobotHardware, WebotsHardware) with the commands coming from the CLI.
+    A subclass, not a wrapper: WebotsHardware.read() calls self.command() itself."""
 
-    def __init__(self, hw, cli):
-        self.hw, self.cli = hw, cli
+    class CliHardware(base):
+        def command(self):              # the CLI first; then the class's own (Webots keys G, S, L)
+            return cli.command() or super().command()
 
-    def __getattr__(self, name):        # camera, wheels, sonar, show... unchanged
-        return getattr(self.hw, name)
+        def step(self):                 # False after q: fsm.main's loop ends (the motors stop on exit)
+            return cli.running() and super().step()
 
-    def command(self):
-        return self.cli.command()
+        def attach(self, fsm):
+            cli.attach(fsm)
 
-    def step(self):                     # False after q: fsm.main's loop ends (the motors stop on exit)
-        return self.cli.running() and self.hw.step()
+    return CliHardware
 
-    def attach(self, fsm):
-        self.cli.attach(fsm)
+
+class FakeFsm:
+    """--fake: plays the FSM's part on the PC, without camera or wheels: drives the Mission node by node,
+    EDGE_S seconds per edge, with the same calls as the real FSM (Mission.on_node at each node)."""
+
+    def __init__(self):
+        self.state, self.nav, self.reason, self.t_next = "IDLE", None, "start", 0.0
+
+    def step(self, cmd, t):
+        from navigators import Mission
+        if cmd == "STOP":
+            self.state, self.reason = "IDLE", "STOP command"
+        elif isinstance(cmd, tuple) and self.state == "IDLE":
+            self.nav, self.state, self.t_next = Mission(*cmd[1:]), "NODE", t
+        if self.state == "NODE" and t >= self.t_next:       # the next node is reached
+            order, why = self.nav.on_node(None)
+            console.print(f"[dim]  fake robot: {order.lower()}: {why}[/]")
+            if order == "STOP":
+                self.state, self.reason = "IDLE", f"STOP at the node: {why}"
+            self.t_next = t + EDGE_S
+
+
+def run_fake(cli, time_step=0.064):
+    fsm = FakeFsm()
+    cli.attach(fsm)
+    while cli.running():                # the robot loop, 64 ms per cycle
+        fsm.step(cli.command(), time.monotonic())
+        time.sleep(time_step)
 
 
 def ask_start(n):
-    """Start node and heading typed by the user (MISSION = None in params.ini)."""
+    """Start node and heading typed by the user (MISSION = None in params.ini, or --fake)."""
     while True:
         start = parse_node(Prompt.ask("Start node x y", default="0 0"), n)
         if start is not None:
@@ -179,13 +201,33 @@ def ask_start(n):
     return start, heading
 
 
-def main():
-    import fsm                          # robot code (camera, serial): imported here, only on the Pi
-    from robot_hardware import RobotHardware
-
+def start_cli(start, heading, n, g):
+    """Header, start view and the keyboard thread. Returns the DeliveryCli the robot loop polls."""
     console.print(Panel("[bold]ST5 Troller: deliveries on the grid[/]\n"
                         "x right, y up, (0, 0) bottom-left. Type a destination, Enter; q to quit.",
                         border_style="cyan", expand=False))
+    cli = DeliveryCli(start, heading, n, g)
+    console.print(Panel(grid_view(n, cli.node, cli.heading), title=f"[bold]start {cli.node}, facing {heading}[/]",
+                        expand=False))
+    threading.Thread(target=cli.input_loop, daemon=True).start()
+    return cli
+
+
+def main(argv=None):
+    """python3 cli.py: the real robot (Pi). python3 cli.py --fake: on a PC, a fake robot (no camera, no serial)."""
+    argv = sys.argv[1:] if argv is None else argv
+    if "--fake" in argv:
+        start, heading = ask_start(DEFAULT_N)
+        cli = start_cli(start, heading, DEFAULT_N, DEFAULT_G)
+        try:
+            run_fake(cli)
+        except KeyboardInterrupt:
+            console.print("\nstopped (Ctrl+C)")
+        console.print(cli.summary())
+        return
+    import fsm                          # robot code (camera, serial): imported here, only on the Pi
+    from robot_hardware import RobotHardware
+
     if fsm.MISSION is not None:         # params.ini: start, heading, grid size and spacing from the mission
         _, start, heading, _, n, g = fsm.MISSION
     else:
@@ -193,12 +235,9 @@ def main():
         start, heading = ask_start(n)
     fsm.MISSION = ("MISSION", tuple(start), heading, tuple(start), n, g)   # not None: the node detectors start
     fsm.AUTO_START = None               # no automatic mission: the CLI gives them
-    cli = DeliveryCli(start, heading, n, g)
-    console.print(Panel(grid_view(n, cli.node, cli.heading), title=f"[bold]start {cli.node}, facing {heading}[/]",
-                        expand=False))
-    threading.Thread(target=cli.input_loop, daemon=True).start()
+    cli = start_cli(start, heading, n, g)
     try:
-        fsm.main(CliHardware(RobotHardware(fsm.TIME_STEP), cli))
+        fsm.main(cli_hardware(RobotHardware, cli)(fsm.TIME_STEP))
     except KeyboardInterrupt:           # Ctrl+C still works (the motors stop on exit)
         console.print("\nstopped (Ctrl+C)")
     console.print(cli.summary())

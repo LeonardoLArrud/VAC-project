@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 from rich.console import Console  # noqa: E402
 
-from cli import CliHardware, DeliveryCli, grid_view, parse_node  # noqa: E402
+from cli import FakeFsm, DeliveryCli, cli_hardware, grid_view, parse_node  # noqa: E402
 from navigators import Mission  # noqa: E402
 
 
@@ -103,14 +103,40 @@ class TestView(unittest.TestCase):
 
 
 class TestCliHardware(unittest.TestCase):
-    def test_delegates_and_stops_after_quit(self):
+    def test_subclass_gets_cli_commands_and_stops_after_quit(self):
+        class Robot:                    # stands for RobotHardware / WebotsHardware
+            def step(self):
+                return True
+
+            def command(self):
+                return "START"          # e.g. a Webots key
+
+            def read(self):             # like WebotsHardware.read(): calls self.command() itself
+                return self.command()
+
         cli, _ = quiet_cli()
-        robot = SimpleNamespace(step=lambda: True, aim_sonar=lambda a: None)
-        hw = CliHardware(robot, cli)
-        self.assertTrue(hasattr(hw, "aim_sonar"))  # fsm.main's hooks still see the robot's methods
+        hw = cli_hardware(Robot, cli)()
+        cli.handle("1 0")
+        self.assertEqual(hw.read()[0], "MISSION")   # the CLI's command goes first
+        self.assertEqual(hw.read(), "START")        # then the class's own
         self.assertTrue(hw.step())
         cli.handle("q")
         self.assertFalse(hw.step())
+
+
+class TestFakeFsm(unittest.TestCase):
+    def test_drives_the_mission_node_by_node(self):
+        cli, _ = quiet_cli()
+        fsm = FakeFsm()
+        cli.attach(fsm)
+        cli.handle("2 0")
+        fsm.step(cli.command(), t=0.0)  # leaves (0, 0)
+        self.assertEqual(fsm.state, "NODE")
+        fsm.step(cli.command(), t=1.0)  # at (1, 0)
+        fsm.step(cli.command(), t=2.0)  # at (2, 0): the goal
+        self.assertEqual(fsm.state, "IDLE")
+        cli.command()                   # the CLI notices the arrival
+        self.assertEqual(cli.deliveries[0][:2], ((2, 0), "arrived"))
 
 
 if __name__ == "__main__":

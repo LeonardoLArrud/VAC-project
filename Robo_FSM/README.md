@@ -47,6 +47,11 @@ If the period shows trouble, give the serial link a core of its own: a separate 
    next one, from where it stopped. `q` + Enter stops (also while driving). Start node, heading, grid size and spacing
    come from `MISSION` in `params.ini` (its goal is ignored), or are asked at launch if `MISSION = None`.
    rich only prints at events (new destination, arrival), not in the loop: the 64 ms loop is not slowed.
+   Before the Pi, on a PC (a Python with `rich`, plus `numpy` and `opencv` for Webots):
+   - `python3 cli.py --fake`: a fake robot (no camera, no serial) moves along the real `Mission` path, 1 s per edge.
+   - Webots, real FSM on the 5x5 grid: open `worlds/grid_5x5_extern.wbt`, then from `controllers/fsm/` run
+     `WEBOTS_HOME=/Applications/Webots.app $WEBOTS_HOME/Contents/MacOS/webots-controller --robot-name=Cherokey_4W_v3 cli_webots.py`
+     (see `cli_webots.py`; the `python3` first in PATH is the one used).
 
 ## Before the first test
 
