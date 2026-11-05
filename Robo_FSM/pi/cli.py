@@ -12,6 +12,8 @@ from rich.text import Text
 
 HEADINGS = "ENWS"                   # navigators.Mission: E, N, W, S
 ARROW = {"E": "▶", "N": "▲", "W": "◀", "S": "▼"}
+CAR = "bold black on bright_green"      # the robot on the grid: a bright block, easy to spot
+GOAL = "bold white on bright_magenta"   # the destination
 QUIT = "q"
 DEFAULT_N, DEFAULT_G = 5, 0.975     # nodes per side, m between node centres (the track)
 EDGE_S = 1.0                        # --fake: seconds to drive one edge
@@ -32,12 +34,13 @@ def grid_view(n, robot, heading, goal=None):
     """The grid seen from above, y up: the robot as an arrow, the goal as ◎, the other nodes as ·."""
     lines = []
     for y in range(n - 1, -1, -1):
-        row = Text(f"{y} ", style="dim")
+        row = Text()                    # no style on the row itself: the car and goal would inherit it (dim)
+        row.append(f"{y} ", style="dim")
         for x in range(n):
             if (x, y) == robot:
-                row.append(ARROW[heading], style="bold green")
+                row.append(ARROW[heading], style=CAR)
             elif (x, y) == goal:
-                row.append("◎", style="bold yellow")
+                row.append("◎", style=GOAL)
             else:
                 row.append("·", style="dim")
             if x < n - 1:
@@ -89,7 +92,7 @@ class DeliveryCli:
             self.goal, self.sent, self.t_goal = goal, False, time.monotonic()
             self.pending.put(("MISSION", self.node, self.heading, goal, self.n, self.g))
             self.say(Panel(grid_view(self.n, self.node, self.heading, goal),
-                           title=f"[bold]{self.node} → {goal}[/]", subtitle="q + Enter: stop", expand=False))
+                           title=f"[{CAR}] {self.node} [/] → [{GOAL}] {goal} [/]", subtitle="q + Enter: stop", expand=False))
         return True
 
     def input_loop(self):
