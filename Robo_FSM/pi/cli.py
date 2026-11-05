@@ -1,12 +1,16 @@
+import ast
+import configparser
+import os
 import queue
 import re
 import sys
+import tempfile
 import threading
 import time
 
 from rich.console import Console, Group
 from rich.panel import Panel
-from rich.prompt import Prompt
+from rich.prompt import FloatPrompt, Prompt
 from rich.table import Table
 from rich.text import Text
 
@@ -193,15 +197,76 @@ def run_fake(cli, time_step=0.064):
         time.sleep(time_step)
 
 
-def ask_start(n):
-    """Start node and heading typed by the user (MISSION = None in params.ini, or --fake)."""
+def ask_start(n, start=(0, 0), heading="E"):
+    """Start node and heading typed by the user; Enter keeps the given ones."""
     while True:
-        start = parse_node(Prompt.ask("Start node x y", default="0 0"), n)
-        if start is not None:
+        node = parse_node(Prompt.ask("Start node x y", default=f"{start[0]} {start[1]}"), n)
+        if node is not None:
             break
         console.print(f"[red]type x y, each between 0 and {n - 1}[/]")
-    heading = Prompt.ask("Heading", choices=list(HEADINGS), default="E")
-    return start, heading
+    heading = Prompt.ask("Heading", choices=list(HEADINGS), default=heading)
+    return node, heading
+
+
+def ask_speed(v0):
+    """V0 (m/s) typed by the user; Enter keeps the given one."""
+    while True:
+        v = FloatPrompt.ask("V0, speed on straights (m/s)", default=v0)
+        if v > 0:
+            return v
+        console.print("[red]V0 must be above 0[/]")
+
+
+# ------------------------------------------------------------ settings for one run (params.ini is not changed)
+def ini_value(path, section, key):
+    """Value of key in [section] of a params .ini (a Python literal), or None if it is not there."""
+    ini = configparser.ConfigParser(inline_comment_prefixes=("#",), interpolation=None)
+    ini.optionxform = str
+    ini.read(path)
+    return ast.literal_eval(ini.get(section, key)) if ini.has_option(section, key) else None
+
+
+def with_value(text, section, key, value):
+    """The .ini text with `key = value` in [section]; everything else (comments, other sections) unchanged."""
+    out, inside, done = [], False, False
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("["):
+            inside = stripped == f"[{section}]"
+        elif inside and not done and re.match(rf"{re.escape(key)}\s*=", stripped):
+            m = re.match(rf"(\s*{re.escape(key)}\s*=\s*)[^#\n]*?(\s*#.*)?(\n?)$", line)
+            line, done = f"{m.group(1)}{value!r}{m.group(2) or ''}{m.group(3)}", True
+        out.append(line)
+    if not done:
+        raise KeyError(f"[{section}] {key} not found")
+    return "".join(out)
+
+
+def run_params(path, v0):
+    """A temporary copy of the params file with this run's V0. Returns its path (to delete at the end)."""
+    with open(path) as f:
+        text = with_value(f.read(), "line_follower", "V0", v0)
+    fd, run_path = tempfile.mkstemp(prefix="params_run_", suffix=".ini")
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    return run_path
+
+
+def ask_run_settings(path):
+    """V0, start node and heading for this run, the file's values as defaults. Returns (v0, start, heading, n, g)."""
+    v0, mission = ini_value(path, "line_follower", "V0"), ini_value(path, "fsm", "MISSION")
+    if mission:                         # ("MISSION", start, heading, goal, n, g): the goal is not used
+        start, heading, n, g = tuple(mission[1]), mission[2], mission[4], mission[5]
+    else:
+        start, heading, n, g = (0, 0), "E", DEFAULT_N, DEFAULT_G
+    console.print(Panel(f"Settings for [bold]this run only[/]: {os.path.basename(path)} is not changed.\n"
+                        "Enter keeps the value in brackets.", title="[bold]settings[/]", border_style="cyan",
+                        expand=False))
+    new_v0 = ask_speed(v0)
+    start, heading = ask_start(n, start, heading)
+    console.print(f"V0 [bold]{new_v0}[/] m/s" + (f" (file: {v0})" if new_v0 != v0 else "")
+                  + f", start [bold]{start}[/] facing [bold]{heading}[/], {n}x{n} grid, {g} m between nodes")
+    return new_v0, start, heading, n, g
 
 
 def start_cli(start, heading, n, g, cli=None):
@@ -229,22 +294,27 @@ def main(argv=None):
             console.print("\nstopped (Ctrl+C)")
         console.print(cli.summary())
         return
-    import fsm                          # robot code (camera, serial): imported here, only on the Pi
-    from robot_hardware import RobotHardware
+    import params                       # only its PATH: the robot modules are not loaded yet
 
-    if fsm.MISSION is not None:         # params.ini: start, heading, grid size and spacing from the mission
-        _, start, heading, _, n, g = fsm.MISSION
-    else:
-        n, g = DEFAULT_N, DEFAULT_G
-        start, heading = ask_start(n)
-    fsm.MISSION = ("MISSION", tuple(start), heading, tuple(start), n, g)   # not None: the node detectors start
-    fsm.AUTO_START = None               # no automatic mission: the CLI gives them
-    cli = start_cli(start, heading, n, g)
+    v0, start, heading, n, g = ask_run_settings(params.PATH)
+    # This run's copy of the params, with the new V0. Set before the robot modules load their values; the
+    # environment variable also reaches the corner detector's process (a fresh interpreter: "spawn").
+    run_path = run_params(params.PATH, v0)
+    os.environ["ROBO_PARAMS"] = params.PATH = run_path
     try:
-        fsm.main(cli_hardware(RobotHardware, cli)(fsm.TIME_STEP))
-    except KeyboardInterrupt:           # Ctrl+C still works (the motors stop on exit)
-        console.print("\nstopped (Ctrl+C)")
-    console.print(cli.summary())
+        import fsm                      # robot code (camera, serial): imported here, only on the Pi
+        from robot_hardware import RobotHardware
+
+        fsm.MISSION = ("MISSION", tuple(start), heading, tuple(start), n, g)   # not None: node detectors start
+        fsm.AUTO_START = None           # no automatic mission: the CLI gives them
+        cli = start_cli(start, heading, n, g)
+        try:
+            fsm.main(cli_hardware(RobotHardware, cli)(fsm.TIME_STEP))
+        except KeyboardInterrupt:       # Ctrl+C still works (the motors stop on exit)
+            console.print("\nstopped (Ctrl+C)")
+        console.print(cli.summary())
+    finally:
+        os.remove(run_path)
 
 
 if __name__ == "__main__":

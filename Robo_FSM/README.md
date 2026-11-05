@@ -44,8 +44,9 @@ If the period shows trouble, give the serial link a core of its own: a separate 
    Writes `fsm_log.csv`; every intersection is printed as `[NODE] ... exits=[...]`.
 5. Deliveries chosen while it runs: `python3 cli.py` (needs `rich`: `pip install rich` or `sudo apt install python3-rich`).
    Type a destination `x y` (x right, y up, (0, 0) bottom-left) and Enter: it drives there; at the goal it asks for the
-   next one, from where it stopped. `q` + Enter stops (also while driving). Start node, heading, grid size and spacing
-   come from `MISSION` in `params.ini` (its goal is ignored), or are asked at launch if `MISSION = None`.
+   next one, from where it stopped. `q` + Enter stops (also while driving). At launch it asks `V0`, the start node and
+   the heading for **this run only** (Enter keeps the value from `params.ini`; the file is not changed: the run uses a
+   temporary copy through `ROBO_PARAMS`). Grid size and spacing come from `MISSION` (its goal is ignored), or 5 and 0.975 m.
    rich only prints at events (new destination, arrival), not in the loop: the 64 ms loop is not slowed.
    Before the Pi, on a PC (a Python with `rich`, plus `numpy` and `opencv` for Webots):
    - `python3 cli.py --fake`: a fake robot (no camera, no serial) moves along the real `Mission` path, 1 s per edge.

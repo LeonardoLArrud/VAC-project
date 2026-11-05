@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 from rich.console import Console  # noqa: E402
 
-from cli import FakeFsm, DeliveryCli, cli_hardware, grid_view, parse_node  # noqa: E402
+from cli import FakeFsm, DeliveryCli, cli_hardware, grid_view, ini_value, parse_node, run_params, with_value  # noqa: E402,E501
 from navigators import Mission  # noqa: E402
 
 
@@ -90,6 +90,41 @@ class TestDeliveries(unittest.TestCase):
         self.assertFalse(cli.handle("Q"))
         self.assertFalse(cli.running())
         self.assertEqual(cli.command(), "STOP")
+
+
+PARAMS_INI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Robo_FSM", "pi", "params.ini")
+
+
+class TestRunSettings(unittest.TestCase):
+    def test_ini_value_reads_the_real_file(self):
+        self.assertIsInstance(ini_value(PARAMS_INI, "line_follower", "V0"), float)
+        self.assertIsNone(ini_value(PARAMS_INI, "line_follower", "NOT_A_KEY"))
+
+    def test_with_value_changes_only_that_line_and_keeps_its_comment(self):
+        text = "[line_follower]\nV0 = 0.32   # speed\nK = 0.1\n[fsm]\nV0 = 9   # another section\n"
+        new = with_value(text, "line_follower", "V0", 0.2)
+        self.assertEqual(new, "[line_follower]\nV0 = 0.2   # speed\nK = 0.1\n[fsm]\nV0 = 9   # another section\n")
+
+    def test_with_value_ignores_commented_lines_and_needs_the_key(self):
+        text = "[fsm]\n# MISSION = 1\nMISSION = None   # x\n"
+        self.assertEqual(with_value(text, "fsm", "MISSION", 2), "[fsm]\n# MISSION = 1\nMISSION = 2   # x\n")
+        with self.assertRaises(KeyError):
+            with_value(text, "fsm", "V0", 1.0)
+
+    def test_run_params_is_a_copy_and_the_file_is_untouched(self):
+        with open(PARAMS_INI) as f:
+            before = f.read()
+        run_path = run_params(PARAMS_INI, 0.123)
+        try:
+            self.assertEqual(ini_value(run_path, "line_follower", "V0"), 0.123)
+            with open(run_path) as f:
+                changed = [(a, b) for a, b in zip(before.splitlines(), f.read().splitlines()) if a != b]
+            self.assertEqual(len(changed), 1)                  # only the V0 line
+            self.assertTrue(changed[0][1].startswith("V0 = 0.123"))
+        finally:
+            os.remove(run_path)
+        with open(PARAMS_INI) as f:
+            self.assertEqual(f.read(), before)                 # params.ini itself not changed
 
 
 class TestView(unittest.TestCase):
