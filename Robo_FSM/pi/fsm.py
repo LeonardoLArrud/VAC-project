@@ -314,6 +314,8 @@ def look_for_node(detector, fsm, image, s):
 def main(hw, nav=Explorer):
     width, height, fov = hw.camera_info()
     fsm = FSM(LineFollower(width, height, fov, TIME_STEP / 1000.0, hw.wheel_v_max()), nav)
+    if hasattr(hw, "attach"):           # e.g. cli.py: watches the FSM to know when a delivery ends
+        hw.attach(fsm)
     detector = None                     # MISSION = None (test of the 8): line and obstacles only
     if MISSION is not None:             # grid mission: the intersections (nodes) are needed
         detector = NodeDetector(width, height, fov, fsm.follower.grey)   # one grey image per frame

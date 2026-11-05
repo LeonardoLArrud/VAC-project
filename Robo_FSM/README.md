@@ -42,6 +42,11 @@ If the period shows trouble, give the serial link a core of its own: a separate 
    copy with a delivery mission: `ROBO_PARAMS=params_entrega.ini python3 robot_hardware.py`.
 4. On the Pi: `python3 robot_hardware.py` (or `python3 fsm.py`). Starts `AUTO_START` s after launch (0: at once), Ctrl+C stops.
    Writes `fsm_log.csv`; every intersection is printed as `[NODE] ... exits=[...]`.
+5. Deliveries chosen while it runs: `python3 cli.py` (needs `rich`: `pip install rich` or `sudo apt install python3-rich`).
+   Type a destination `x y` (x right, y up, (0, 0) bottom-left) and Enter: it drives there; at the goal it asks for the
+   next one, from where it stopped. `q` + Enter stops (also while driving). Start node, heading, grid size and spacing
+   come from `MISSION` in `params.ini` (its goal is ignored), or are asked at launch if `MISSION = None`.
+   rich only prints at events (new destination, arrival), not in the loop: the 64 ms loop is not slowed.
 
 ## Before the first test
 
