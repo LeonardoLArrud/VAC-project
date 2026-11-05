@@ -81,14 +81,29 @@ class Mission(Navigator):  # goal on the grid, path recomputed at every node
         nbrs = self.map.adj.get(self._id(node), {})
         return {EXIT[(d - h) % 4] for d in range(4) if (d - h) % 4 in EXIT and self._id(self._step(node, d)) in nbrs}
 
+    def _relocate(self, exits):
+        """Exits seen that do not fit self.to: the one other neighbour of self.node whose exits fit them, arrived at
+        by leaving self.node towards it (a wrong start heading, a turn onto another line), as (node, heading); None
+        if no neighbour fits, or several do (a crossing seen askew: no guess)."""
+        fits = [(self._step(self.node, d), d) for d in range(4)
+                if (self._step(self.node, d), d) != (self.to, self.h)
+                and self._id(self._step(self.node, d)) in self.map.adj.get(self._id(self.node), {})
+                and set(exits) <= self._exits(self._step(self.node, d), d)]
+        return fits[0] if len(fits) == 1 else None
+
     def on_node(self, exits, s_node=0.0):   # exits None: from the map
-        node, h_in = self.to, self.h
+        node, h_in, moved = self.to, self.h, ""
         if exits is not None and not set(exits) <= self._exits(node, h_in):
-            return "STOP", f"pose lost at {node}: saw {sorted(exits)}, map has {sorted(self._exits(node, h_in))}"
+            fit = self._relocate(exits) if self.node is not None else None
+            if fit is None:
+                return "STOP", f"pose lost at {node}: saw {sorted(exits)}, map has {sorted(self._exits(node, h_in))}"
+            moved = f"relocated to {fit[0]} facing {'ENWS'[fit[1]]} (saw {''.join(sorted(exits))}, {node} has " \
+                    f"{''.join(sorted(self._exits(node, h_in)))}); "
+            node, h_in = fit
         self.node, self.h_in, self.s_at, self.s_next = node, h_in, s_node, s_node + self.g
         if node == self.goal:
             self.path = [node]
-            return "STOP", f"arrived at {node}"
+            return "STOP", f"{moved}arrived at {node}"
         cleared = False
         while True:
             path, _ = dijkstra(self.map, self._id(node), self._id(self.goal))
@@ -106,7 +121,7 @@ class Mission(Navigator):  # goal on the grid, path recomputed at every node
             self._block(node, self._step(node, d))   # exit not there: drop the edge
         self.h, self.to = d, self._step(node, d)
         self.path = [(c, self.n - 1 - r) for r, c in path]
-        return ORDER[rel], f"mission: at {node}, next {self.to}" + (" (boxed in: obstacles forgotten)" if cleared else "")
+        return ORDER[rel], f"{moved}mission: at {node}, next {self.to}" + (" (boxed in: obstacles forgotten)" if cleared else "")
 
     def on_seen(self, s, d):
         """Sonar echo d m ahead (robot at s) while driving to self.to, the plan going on straight after it: an obstacle
