@@ -20,7 +20,7 @@ def sonar_degrees(angle):
 
 
 class RobotHardware:
-    def __init__(self, time_step_ms=64):
+    def __init__(self, time_step_ms=40):
         self.time_step_ms = time_step_ms
         self.ser = serial.Serial(PORT, 115200, timeout=0)   # opening it resets the Arduino: it boots while the camera starts
         self.buf = b""
