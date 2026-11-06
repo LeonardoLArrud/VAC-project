@@ -16,6 +16,7 @@ D_RATE = 50         # D, lines per second the Arduino sends: robo_fsm.ino PERIOD
 
 
 SONAR_LOST_S = 0.5      # the Arduino reports no sonar signal (cm = -2) this long: sonar_ok() is False
+SONAR_MIN_CM = 5        # echoes closer than this are false (the robot stops at D_STOP long before)
 
 
 def sonar_degrees(angle):
@@ -108,7 +109,12 @@ class RobotHardware:
                 if cm != -2:
                     self.t_echo = time.monotonic()
                 self.n_d += 1
-                self.dist = cm / 100.0 if cm >= 0 else (float("inf") if cm == -1 else 0.0)
+                if cm == -2:               # no signal: 0 m, safe; sonar_ok() says why
+                    self.dist = 0.0
+                elif cm == -1 or cm < SONAR_MIN_CM:   # no echo, or a false one
+                    self.dist = float("inf")
+                else:
+                    self.dist = cm / 100.0
                 if len(values) >= 5:
                     self.counts = values[1:5]
                     self.counts0 = self.counts0 or self.counts
