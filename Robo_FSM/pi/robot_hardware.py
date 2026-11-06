@@ -15,6 +15,7 @@ load("robot_hardware", globals())
 
 
 SONAR_LOST_S = 0.5      # the Arduino reports no sonar signal (cm = -2) this long: sonar_ok() is False
+SONAR_MIN_CM = 5
 
 
 def sonar_degrees(angle):
@@ -107,7 +108,12 @@ class RobotHardware:
                 if cm != -2:
                     self.t_echo = time.monotonic()
                 self.n_d += 1
-                self.dist = cm / 100.0 if cm >= 0 else (float("inf") if cm == -1 else 0.0)
+                if cm == -2:
+                    self.dist = 0.0
+                elif cm == -1 or cm < SONAR_MIN_CM:
+                    self.dist = float("inf")
+                else:
+                    self.dist = cm / 100.0
                 if len(values) >= 5:
                     self.counts = values[1:5]
                     self.counts0 = self.counts0 or self.counts
