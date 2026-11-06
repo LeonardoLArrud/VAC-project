@@ -225,3 +225,32 @@ class TestDiagSerialStatus(unittest.TestCase):
 
     def test_line_without_pwm(self):
         self.assertEqual(self.status_of("D,35,1,2,3,4\n"), (35, [1, 2, 3, 4]))
+
+
+class LineAhead(FakeFollower):
+    """The line straight ahead, always seen."""
+
+    def step(self, image, v, v_now, w):
+        return SimpleNamespace(status=fsm.OK, side=1.0, v=0.1, w=0.0, c=0.0, target=(0.30, 0.0))
+
+
+class TestNodeKeptThroughWait(unittest.TestCase):
+    """A node announced in the cycle the sonar stops the robot is used once the obstacle has gone."""
+
+    def test_node_seen_as_it_stops_is_taken_after_the_wait(self):
+        f = FSM(LineAhead())
+        f.go(FOLLOW, "START command")
+        f.step(1.0, None, 0.19, 0.0, None, 1.00, (0.30, {"L"}))     # node and obstacle in the same cycle
+        self.assertEqual(f.state, fsm.WAIT)
+        f.step(1.1, None, math.inf, 0.0, None, 1.00, None)          # obstacle gone: back to FOLLOW
+        self.assertEqual(f.state, FOLLOW)
+        f.step(1.2, None, math.inf, 0.0, None, 1.02, None)          # the kept node, 0.28 m ahead now
+        self.assertEqual(f.state, fsm.NODE)
+        self.assertAlmostEqual(f.s_node, 1.30)
+
+    def test_u_turn_drops_the_kept_node(self):
+        f = FSM(LineAhead())
+        f.go(FOLLOW, "START command")
+        f.step(1.0, None, 0.19, 0.0, None, 1.00, (0.30, {"L"}))
+        f.start_turn(math.pi, "edge blocked")
+        self.assertIsNone(f.kept_node)
