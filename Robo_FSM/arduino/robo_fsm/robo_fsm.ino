@@ -18,7 +18,7 @@ const unsigned long PERIOD_D_MS = 20;   // faster than the Pi loop (40 ms): fres
 const unsigned long PERIOD_PI_MS = 20;
 const unsigned long VALID_US = 300000UL;
 const unsigned long STOPPED_US = 100000UL;
-const int PWM_SLEW = 20;                     // max PWM change per PI step: 0 -> 255 in about 260 ms
+const int PWM_SLEW = 10;                     // max PWM change per PI step: 0 -> 255 in about 510 ms
 
 const float WHEEL_R = 0.0325;
 const float COUNTS_PER_REV = 11 * 21.3;
