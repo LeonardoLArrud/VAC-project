@@ -1,6 +1,6 @@
 """Main loop of the basic FSM (v1). Same loop in Webots, on the real robot and offline.
 
-Run in Webots: set the robot's controller to "fsm" (or, in the VM, ./run_extern.sh fsm).
+Run in Webots: set the robot's controller to "fsm" (the grid_5x5*.wbt worlds already do).
 It uses webots_hardware.py, where every hook is filled in (camera, motors, encoders,
 rangefinder, servo, keyboard).
 The offline test (offline/scenarios.py) calls main() with simulated hooks.
@@ -21,7 +21,7 @@ TIME_STEP = 64      # ms
 AUTO_START = 1.0    # s; None = wait for a START command
 LIVE_VIEW = True    # Webots only: http://localhost:8000/ shows the camera, the mask and the line points
 # MISSION: sent at AUTO_START instead of START, and by key M. (start, heading, goal[, n, g]) on an n x n grid, g m apart.
-# grid_5x5*.wbt: ("MISSION", (0, 0), "E", (4, 3)); experiments grid_*_extern.wbt: ("MISSION", (4, 1), "N", (6, 7), 9, 1.0)
+# grid_5x5*.wbt: ("MISSION", (0, 0), "E", (4, 3))
 MISSION = None
 NAV = Explorer      # navigator factory: Explorer (the 8, START without a mission); tests: lambda: OrderList([...])
 

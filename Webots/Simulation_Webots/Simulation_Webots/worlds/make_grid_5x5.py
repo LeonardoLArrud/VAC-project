@@ -2,8 +2,7 @@
 
 Run from this folder:  uv run --with numpy --with pillow make_grid_5x5.py
 Writes the floor textures and, for each world below, <world>.wbt (controllers fsm and grid_pose, launched
-by Webots) and <world>_extern.wbt (both <extern>; from the VM: ./run_extern.sh fsm Cherokey_4W_v3 and
-./run_extern.sh grid_pose grid_pose):
+by Webots) and <world>_extern.wbt (both <extern>; started by controllers/fsm/cli_webots.py):
 - grid_5x5: the clean grid;
 - grid_5x5_box: plus a 10 x 10 x 15 cm box in the middle of edge (2, 3)-(3, 3), on the route of MISSION((0, 0), E, (4, 3));
 - grid_5x5_reflexos: plus floor reflections (white spots) near the lines and beyond the border T's.

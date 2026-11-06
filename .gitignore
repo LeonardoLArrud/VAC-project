@@ -27,13 +27,19 @@ env/
 ._*
 Thumbs.db
 
-# --- Project: images regenerated every time the scripts run ---
-# corner_detection*.py, code2.py
-out_test.png
-# perception1.py
-test.jpg
-# perception2.py
-test2.jpg
+# --- Webots: window layout and world thumbnails, rewritten on every save ---
+Webots/**/worlds/.*.wbproj
+Webots/**/worlds/.*.jpg
+*.exe
+*.o
+*.d
+
+# --- Written at every run (robot, Webots, offline scenarios) ---
+fsm_log.csv
+mission.json
+mission.json.tmp
+grid_pose.csv
+Webots/**/controllers/fsm/offline/results/
 
 # --- Local experiments (Webots test worlds, VM extern setup): not versioned ---
 /experiments/

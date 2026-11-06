@@ -1,4 +1,4 @@
-"""Pure pursuit line follower (same law as pure_pursuit.py). With no target: LOST, v = w = 0."""
+"""Pure pursuit line follower (same law as the Webots controllers/fsm/line_follower.py). With no target: LOST, v = w = 0."""
 from __future__ import annotations
 
 import math

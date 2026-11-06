@@ -1,15 +1,15 @@
 """Interactive visual test of the graph logic: track, Dijkstra, obstacles,
 cruising without a goal, sharp turns on the 8 and maneuvers.
 
-Run from the project root (needs a Python with tkinter, e.g. the team's .venv):
-    ../.venv/bin/python visual_test.py
+Run from Robo_FSM/ (needs a Python with tkinter):
+    python visual_test.py
 """
 
 import os
 import sys
 import tkinter as tk
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "Robo_FSM"))   # graph/ lives in Robo_FSM/
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # graph/ is next to this file
 
 from graph.maneuver import maneuver
 from graph.simulation import Simulation, edges, nearest_edge, nearest_node

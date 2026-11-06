@@ -7,8 +7,10 @@ The Arduino only applies the PWM it receives and reports the ultrasound distance
 
 | Folder | What it has |
 |---|---|
-| `pi/` | `fsm.py` (FSM and main loop), `line_follower.py`, `robot_hardware.py` (Pi Camera + serial), `navigators.py` and `node_detector.py` (same files as the Webots controller) |
+| `pi/` | `fsm.py` (FSM and main loop), `line_follower.py`, `node_detector.py` (bars) and `corner_detector.py` (corners), `navigators.py`, `robot_hardware.py` (Pi Camera + serial), `camera_stream.py` (live view), `cli.py` (deliveries), `diag.py` (checks and calibration), `replay_filters.py` (replays a recording offline), `params.py` + `params.ini` / `params_entrega.ini` |
 | `graph/` | the graph logic: `path.py` (Dijkstra) and `track.py` (grid map) used by `Mission`, plus `navigation.py`, `maneuver.py`, `simulation.py`. The only copy in the repo: the Webots `navigators.py`, `tests/` and `visual_test.py` load it from here |
+| `tests/` | unit tests of `graph/` and `cli.py`: from `Robo_FSM/`, `python -m unittest discover tests` (`test_cli.py` needs `rich`) |
+| `visual_test.py` | interactive view of the graph logic (tkinter): `python visual_test.py` from `Robo_FSM/` |
 | `arduino/robo_fsm/` | `robo_fsm.ino` and the course files it uses (`Motor`, `MyServo`, `Parameters.h`) |
 
 ## Serial protocol (115200)
@@ -72,7 +74,7 @@ Python literals, angles with `_deg` are in degrees; a missing or misspelled name
 - `[fsm]`: `MISSION` (None = the 8: line and obstacles only, nodes and corners are not searched), obstacle
   distances and times, turns. `NODES` (with a MISSION only): who announces intersections: `"bars"`
   (`node_detector.py`), `"corners"` (`corner_detector.py`) or `"both"`.
-- `[corner_detector]`: the corner detection v4 of `TP-dev-emb/TP_Dev_Emb/corner_detection_v4.py` (a "+" crossing =
+- `[corner_detector]`: the corner detection v4 of the embedded dev TP, `corner_detection_v4.py` (a "+" crossing =
   3 or 4 concave corners, exits S, L, R; T and L nodes are left to the bars). Its px sizes are the v4 ones at 1280 px,
   scaled to `CAM_WIDTH`. `PARALLEL = "process"` runs it on another core of the Pi 3 so the 64 ms loop is not slowed;
   at exit it prints `[CORNERS] ... images/s, ms each`: it needs about 5 images/s or more at `V0 = 0.25`.

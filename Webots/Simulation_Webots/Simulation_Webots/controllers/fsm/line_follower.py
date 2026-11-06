@@ -1,6 +1,6 @@
 """Line follower (ready-made block), packaged so the FSM can call it.
 
-Same logic as controllers/pure_pursuit/pure_pursuit.py:
+Same logic as the project's first pure pursuit controller:
 - 4 bands on the floor (0.20 to 0.36 m); target (L, Y) = farthest valid band;
 - pure pursuit: c = 2Y/(L^2 + Y^2), w = v*c;
 - v limited by V0, delay, slip and outer wheel, with an acceleration limit;
@@ -8,7 +8,7 @@ Same logic as controllers/pure_pursuit/pure_pursuit.py:
 
 Two differences, both to keep the follower separate from the FSM:
 1. With no target it returns status LOST and v = w = 0. Searching for the
-   line is the FSM's job (pure_pursuit.py spun in place here).
+   line is the FSM's job (the first controller spun in place here).
 2. Propagation and the acceleration limit use the motion the FSM actually
    applied (v_prev, w_prev), not what the follower proposed.
 """

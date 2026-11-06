@@ -1,4 +1,4 @@
-"""Intersection detector by corners: the corner detection v4 of TP-dev-emb/TP_Dev_Emb/corner_detection_v4.py,
+"""Intersection detector by corners: the corner detection v4 of the embedded dev TP (corner_detection_v4.py),
 run on the FSM camera image.
 
 A "+" crossing has 4 concave corners; with at least EXPECTED of them it is a node with exits S, L and R.

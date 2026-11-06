@@ -5,7 +5,7 @@ import sys
 import unittest
 from types import SimpleNamespace
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Robo_FSM", "pi"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pi"))
 
 from rich.console import Console  # noqa: E402
 
@@ -94,7 +94,7 @@ class TestDeliveries(unittest.TestCase):
         self.assertEqual(cli.command(), "STOP")
 
 
-PARAMS_INI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Robo_FSM", "pi", "params.ini")
+PARAMS_INI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pi", "params.ini")
 
 
 class TestRunSettings(unittest.TestCase):
