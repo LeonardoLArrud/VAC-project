@@ -17,7 +17,7 @@ The Arduino only applies the PWM it receives and reports the ultrasound distance
 - Arduino to Pi: `D,<cm>,<nFR>,<nFL>,<nRR>,<nRL>,<pFR>,<pFL>,<pRR>,<pRL>` every 50 ms (cm: -1 = no echo, -2 = no
   signal; n = encoder counts; p = PWM applied now). The Pi also reads the older line without the PWM.
 - Pi to Arduino: `T<pwm>` PWM ceiling of each wheel while spinning in place (`PWM_TURN_MAX`, sent at start; 255 at
-  boot). The wheel PI also ramps the PWM up by at most 10 per 20 ms: the 4 motors never jump to full PWM together.
+  boot). The wheel PI also ramps the PWM up by at most 20 per 20 ms: the 4 motors never jump to full PWM together.
 - Pi to Arduino: `A<deg>` sonar servo at 90 + deg (0..180; the Pi limits it with `SONAR_MAX_deg`). Only
   `diag.py sonar` turns it: the FSM keeps the sonar straight ahead.
 - The navigation (grid map, Dijkstra) runs only on the Pi (`navigators.py`).
