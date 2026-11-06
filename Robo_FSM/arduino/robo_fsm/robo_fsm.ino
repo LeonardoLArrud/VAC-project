@@ -1,7 +1,10 @@
 // Arduino for the FSM on the Pi.
 // In:  S<left>,<right>  wheel speed in mm/s, per-wheel PI      M<left>,<right>  raw PWM -255..255      X  stop
 //      A<deg>  sonar servo at 90 + deg (0..180: the Pi limits it with params.ini SONAR_MAX_deg)
-// Out: D,<cm>,<nFR>,<nFL>,<nRR>,<nRL> every 50 ms  (cm: -1 = no echo, -2 = no signal; n = encoder counts)
+//      T<pwm>  PWM ceiling (0..255) of each wheel while spinning in place (S with opposite sides); 255 at boot
+// Out: D,<cm>,<nFR>,<nFL>,<nRR>,<nRL>,<pFR>,<pFL>,<pRR>,<pRL> every 50 ms
+//      (cm: -1 = no echo, -2 = no signal; n = encoder counts; p = PWM applied now, -255..255)
+// The PI raises a wheel's PWM by at most PWM_SLEW per 20 ms step (a stop is immediate).
 // Stops the motors after 300 ms without S or M.
 
 #include "Motor.h"
@@ -15,6 +18,7 @@ const unsigned long PERIOD_D_MS = 50;
 const unsigned long PERIOD_PI_MS = 20;
 const unsigned long VALID_US = 300000UL;
 const unsigned long STOPPED_US = 100000UL;
+const int PWM_SLEW = 20;                     // max PWM change per PI step: 0 -> 255 in about 260 ms
 
 const float WHEEL_R = 0.0325;
 const float COUNTS_PER_REV = 11 * 21.3;
@@ -43,6 +47,8 @@ volatile bool pulseOpen = false;
 
 float ref[4] = {0, 0, 0, 0};
 float integ[4] = {0, 0, 0, 0};
+int pwm[4] = {0, 0, 0, 0};                   // PWM applied now (reported in D)
+int pwmTurnMax = 255;                        // T<pwm>: ceiling while spinning in place
 bool closedLoop = false;
 unsigned long tLastCmd = 0;
 unsigned long tLastD = 0;
@@ -95,11 +101,16 @@ int distance() {
   return cm > 900 ? -1 : (int)cm;
 }
 
+void setMotor(int i, int value) {
+  pwm[i] = value;
+  motor[i].setvalue(value);
+}
+
 void setSides(int left, int right) {
-  motor[0].setvalue(right);
-  motor[2].setvalue(right);
-  motor[1].setvalue(left);
-  motor[3].setvalue(left);
+  setMotor(0, right);
+  setMotor(2, right);
+  setMotor(1, left);
+  setMotor(3, left);
 }
 
 void stopAll() {
@@ -107,23 +118,27 @@ void stopAll() {
   for (int i = 0; i < 4; i++) {
     ref[i] = 0;
     integ[i] = 0;
-    motor[i].setvalue(0);
+    setMotor(i, 0);
   }
 }
 
 void controlStep() {
   float dt = PERIOD_PI_MS / 1000.0;
+  bool spin = (ref[0] > 0) != (ref[1] > 0) && ref[0] != 0 && ref[1] != 0;   // sides opposite: in place
+  int top = spin ? pwmTurnMax : 255;
   for (int i = 0; i < 4; i++) {
     if (ref[i] == 0) {
       integ[i] = 0;
-      motor[i].setvalue(0);
+      setMotor(i, 0);
       continue;
     }
     float e = ref[i] - wheelSpeed(i);
     float u = (ref[i] > 0 ? U0 : -U0) + KFF * ref[i] + KP * e + integ[i];
-    bool sat = u > 255 || u < -255;
+    int out = constrain((int)u, -top, top);
+    out = constrain(out, pwm[i] - PWM_SLEW, pwm[i] + PWM_SLEW);
+    bool sat = out != (int)u;                  // held by the ceiling or the ramp: no wind-up
     if (!sat || (u > 0) != (e > 0)) integ[i] += KI * e * dt;
-    motor[i].setvalue(constrain((int)u, -255, 255));
+    setMotor(i, out);
   }
 }
 
@@ -146,6 +161,9 @@ void readCommands() {
         closedLoop = false;
         setSides(constrain(left, -255, 255), constrain(right, -255, 255));
       }
+    } else if (c == 'T') {
+      int top = Serial.parseInt();             // not inside constrain(): the macro would read the serial again
+      pwmTurnMax = constrain(top, 0, 255);
     } else if (c == 'X') {
       stopAll();
       tLastCmd = 0;
@@ -188,6 +206,10 @@ void loop() {
     for (int i = 0; i < 4; i++) {
       Serial.print(",");
       Serial.print(n[i]);
+    }
+    for (int i = 0; i < 4; i++) {
+      Serial.print(",");
+      Serial.print(pwm[i]);
     }
     Serial.println();
   }

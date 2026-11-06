@@ -10,7 +10,7 @@ from params import load
 
 # values: params.ini [robot_hardware]
 PORT = CAM_WIDTH = CAM_HEIGHT = CAM_FOV = CAM_ROTATED_180 = USE_ENCODERS = None
-V_MAX = PWM_MIN = WHEEL_R = COUNTS_PER_REV = LIVE_VIEW = SONAR_SIGN = SONAR_MAX = None
+V_MAX = PWM_MIN = PWM_TURN_MAX = WHEEL_R = COUNTS_PER_REV = LIVE_VIEW = SONAR_SIGN = SONAR_MAX = None
 load("robot_hardware", globals())
 
 
@@ -27,6 +27,7 @@ class RobotHardware:
         self.dist = float("inf")
         self.sonar_deg = 0                 # servo offset last sent (robo_fsm.ino starts it straight ahead)
         self.counts = self.counts0 = None
+        self.pwm = None                    # PWM the Arduino applies to each wheel (FR, FL, RR, RL), from the D lines
         self.alive = False                 # a D, line arrived: the Arduino is up
         self.n_d = 0                       # D, lines read so far (20 per second when the serial keeps up)
         self.cam = self._open_camera()
@@ -39,6 +40,7 @@ class RobotHardware:
             except Exception as e:  # noqa: BLE001
                 print(f"live view off: {e}")
         self._wait_arduino()
+        self.set_turn_pwm(PWM_TURN_MAX)
         self.frame = None
         self.w_cmd = self.v_cmd = 0.0
         self.turned = self.travelled = 0.0
@@ -100,9 +102,15 @@ class RobotHardware:
                 cm, self.alive = values[0], True
                 self.n_d += 1
                 self.dist = cm / 100.0 if cm >= 0 else (float("inf") if cm == -1 else 0.0)
-                if len(values) == 5:
-                    self.counts = values[1:]
+                if len(values) >= 5:
+                    self.counts = values[1:5]
                     self.counts0 = self.counts0 or self.counts
+                if len(values) == 9:       # + the PWM of each wheel
+                    self.pwm = values[5:]
+
+    def set_turn_pwm(self, pwm):
+        """PWM ceiling of each wheel while spinning in place (robo_fsm.ino T command; an older one ignores it)."""
+        self.ser.write(f"T{int(pwm)}\n".encode())
 
     def time(self):
         return time.monotonic() - self.t0
