@@ -135,12 +135,12 @@ def status(ser):
     lines = ser.read(ser.in_waiting).decode(errors="ignore").splitlines()
     for line in reversed(lines):
         parts = line.split(",")
-        if parts[0] == "D" and len(parts) in (2, 6):
+        if parts[0] == "D" and len(parts) in (2, 6, 10):     # 10: + the PWM of each wheel
             try:
                 values = [int(x) for x in parts[1:]]
             except ValueError:
                 continue
-            return values[0], (values[1:] or None)
+            return values[0], (values[1:5] or None)
     return None
 
 

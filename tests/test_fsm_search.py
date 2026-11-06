@@ -210,3 +210,18 @@ class TestSonarLost(unittest.TestCase):
         hw.buf = b"D,35,1,2,3,4\n"
         hw._read_serial()
         self.assertTrue(hw.sonar_ok())
+
+
+class TestDiagSerialStatus(unittest.TestCase):
+    """diag.status() reads the D lines with and without the PWM of each wheel."""
+
+    def status_of(self, text):
+        sys.modules.setdefault("libcamera", SimpleNamespace(Transform=None))
+        import diag
+        return diag.status(SimpleNamespace(in_waiting=len(text), read=lambda n: text.encode()))
+
+    def test_line_with_pwm(self):
+        self.assertEqual(self.status_of("D,35,1,2,3,4,120,-120,118,-119\n"), (35, [1, 2, 3, 4]))
+
+    def test_line_without_pwm(self):
+        self.assertEqual(self.status_of("D,35,1,2,3,4\n"), (35, [1, 2, 3, 4]))
