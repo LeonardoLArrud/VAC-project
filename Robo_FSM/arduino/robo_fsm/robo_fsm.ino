@@ -4,7 +4,7 @@
 //      T<pwm>  PWM ceiling (0..255) of each wheel while spinning in place (S with opposite sides); 255 at boot
 // Out: D,<cm>,<nFR>,<nFL>,<nRR>,<nRL>,<pFR>,<pFL>,<pRR>,<pRL> every 20 ms
 //      (cm: -1 = no echo, -2 = no signal; n = encoder counts; p = PWM applied now, -255..255)
-// The PI raises a wheel's PWM by at most PWM_SLEW per 20 ms step (a stop is immediate).
+// The PI raises a wheel's PWM by at most PWM_SLEW per 20 ms step; slowing down is immediate (a reversal stops first).
 // Stops the motors after 300 ms without S or M.
 
 #include "Motor.h"
@@ -135,7 +135,8 @@ void controlStep() {
     float e = ref[i] - wheelSpeed(i);
     float u = (ref[i] > 0 ? U0 : -U0) + KFF * ref[i] + KP * e + integ[i];
     int out = constrain((int)u, -top, top);
-    out = constrain(out, pwm[i] - PWM_SLEW, pwm[i] + PWM_SLEW);
+    if (pwm[i] != 0 && (out > 0) != (pwm[i] > 0)) out = 0;   // reversing: stop first, then ramp up
+    else if (abs(out) > abs(pwm[i])) out = constrain(out, pwm[i] - PWM_SLEW, pwm[i] + PWM_SLEW);   // only speeding up
     bool sat = out != (int)u;                  // held by the ceiling or the ramp: no wind-up
     if (!sat || (u > 0) != (e > 0)) integ[i] += KI * e * dt;
     setMotor(i, out);
