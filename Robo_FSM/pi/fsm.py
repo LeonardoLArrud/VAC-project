@@ -24,7 +24,8 @@ IDLE, FOLLOW, NODE, ALIGN, WAIT, SEARCH, TURN = "IDLE", "FOLLOW", "NODE", "ALIGN
 CHECK = "CHECK"                     # turn done at a node: still, the sonar reads the exit ahead
 SPINNING = (TURN, SEARCH, CHECK)    # in place: s does not move, so anything seen would confirm as a node
 HEADING = {"STRAIGHT": 0.0, **TURNS}   # direction of each order from the arrival heading
-SONAR_FAR = 1.5                     # m: farthest sonar echo trusted to place an obstacle on the map (wall: 1.75)
+SONAR_FAR = 1.0                     # m: farthest sonar echo trusted to place an obstacle on the map (the cone is
+                                    # wide: farther echoes are often beside the line)
 STALL_V, STALL_W = 0.03, 0.3        # commands above these (m/s, rad/s) must move the wheels...
 STALL_DS, STALL_DH = 0.001, 0.01    # ...by at least this much per cycle (m, rad); else T_STALL ends the run
 
