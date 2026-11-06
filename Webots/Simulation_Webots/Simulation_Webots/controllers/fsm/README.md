@@ -5,15 +5,15 @@
 | `fsm_basic.py` | The FSM (IDLE, FOLLOW, NODE, WAIT, SEARCH, TURN). Touches no device |
 | `line_follower.py` | The pure pursuit line follower, packaged (with no target it returns LOST and v = w = 0) |
 | `node_detector.py` | Sees the bar of an intersection 0.40-0.65 m ahead and its exits |
-| `navigators.py` | Where to go at a node: `Explorer` (the 8), `Mission` (Dijkstra on a grid, from `Robo_FSM/graph/`), `OrderList` (tests) |
+| `navigators.py` | Where to go at a node: `Explorer` (the 8), `Mission` (Dijkstra on a grid, from `Robo_FSM/graph/`), `OrderList` (tests). The same file as `Robo_FSM/pi/navigators.py`: keep both equal |
 | `hardware.py` | The hooks: camera, rangefinder, encoders, commands, wheels, servo |
-| `webots_hardware.py` | Webots hooks: camera, 4 motors, encoders PS1 to PS4 (`heading()`), `obstacle_distance()` (URM37), `set_rangefinder_angle()` (servo), keyboard |
+| `webots_hardware.py` | Webots hooks: camera, 4 motors, encoders PS1 to PS4 (`heading()`), `obstacle_distance()` (URM37), `aim_sonar()` (servo), keyboard |
 | `fsm.py` | Main loop: `hw.read()` -> `fsm.step()` -> `hw.wheels()`, writes `fsm_log.csv` |
 | `live_view.py` | The camera and the mask in the browser while the simulation runs |
 | `cli_webots.py` | `Robo_FSM/pi/cli.py` (deliveries typed in a terminal) driving the simulated robot |
 | `offline/` | Simulated hooks (`sim_hardware.py`), 22 scenarios (`scenarios.py`), timeline plot (`timeline.py`) |
 
-The real robot runs its own copy of the FSM, follower, detector and navigators in `Robo_FSM/pi/`
+The real robot runs the same `navigators.py` and newer versions of the FSM, follower and detector in `Robo_FSM/pi/`
 (with `RobotHardware` in `robot_hardware.py`). Both load the graph code from `Robo_FSM/graph/`.
 
 ## Worlds (`../../worlds/`)

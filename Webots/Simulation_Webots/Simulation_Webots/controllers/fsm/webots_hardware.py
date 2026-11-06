@@ -45,7 +45,7 @@ class WebotsHardware(Hardware):
         self.us = self.robot.getDevice("URM37")
         self.us.enable(time_step_ms)
         self.servo = self.robot.getDevice("servomoteur")
-        self.set_rangefinder_angle(0.0)      # look straight ahead
+        self.aim_sonar(0.0)      # look straight ahead
         self.kb = self.robot.getKeyboard()
         self.kb.enable(time_step_ms)
         self.blind = False
@@ -126,5 +126,5 @@ class WebotsHardware(Hardware):
             return float("inf")
         return float(np.interp(raw, US_VALUE, US_DIST))
 
-    def set_rangefinder_angle(self, angle):
+    def aim_sonar(self, angle):
         self.servo.setPosition(float(np.clip(angle, -SERVO_LIMIT, SERVO_LIMIT)))

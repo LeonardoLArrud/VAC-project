@@ -70,6 +70,6 @@ class SimHardware(Hardware):
         right = max(-PHI_MAX, min(PHI_MAX, v_right / WHEEL_R))
         self.w.phi_cmd[:] = [right, left, right, left]
 
-    def set_rangefinder_angle(self, angle):
+    def aim_sonar(self, angle):
         if abs(angle) > 1e-9:
             raise NotImplementedError("the simulated rangefinder only looks straight ahead")

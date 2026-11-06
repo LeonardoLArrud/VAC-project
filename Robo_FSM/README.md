@@ -7,7 +7,7 @@ The Arduino only applies the PWM it receives and reports the ultrasound distance
 
 | Folder | What it has |
 |---|---|
-| `pi/` | `fsm.py` (FSM and main loop), `line_follower.py`, `node_detector.py` (bars) and `corner_detector.py` (corners), `navigators.py`, `robot_hardware.py` (Pi Camera + serial), `camera_stream.py` (live view), `cli.py` (deliveries), `diag.py` (checks and calibration), `replay_filters.py` (replays a recording offline), `params.py` + `params.ini` / `params_entrega.ini` |
+| `pi/` | `fsm.py` (FSM and main loop), `line_follower.py`, `node_detector.py` (bars) and `corner_detector.py` (corners), `navigators.py` (the same file as in the Webots controller), `robot_hardware.py` (Pi Camera + serial), `camera_stream.py` (live view), `cli.py` (deliveries), `diag.py` (checks and calibration), `replay_filters.py` (replays a recording offline), `params.py` + `params.ini` / `params_entrega.ini` |
 | `graph/` | the graph logic used by `Mission`: `path.py` (Dijkstra) and `track.py` (grid map). The only copy in the repo: the Webots `navigators.py` loads it from here |
 | `arduino/robo_fsm/` | `robo_fsm.ino` and the course files it uses (`Motor`, `MyServo`, `Parameters.h`) |
 

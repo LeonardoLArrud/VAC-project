@@ -79,10 +79,10 @@ class Hardware:
         the Arduino runs the per-wheel PI and stops after 200 ms without a command."""
         raise NotImplementedError("Hardware.set_wheels")
 
-    def set_rangefinder_angle(self, angle: float) -> None:
+    def aim_sonar(self, angle: float) -> None:
         """HOOK, not used in v1 (servo stays at 0). Servo angle of the rangefinder, rad,
         0 = straight ahead, positive = left. Needed later by AVOID (v5)."""
-        raise NotImplementedError("Hardware.set_rangefinder_angle")
+        raise NotImplementedError("Hardware.aim_sonar")
 
     # ------------------------------------------------------------ glue (do not change)
     def read(self) -> Reading:

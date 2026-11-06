@@ -5,6 +5,7 @@ Prints the pose every second and, for each pass within NEAR of a node centre, th
 that centre (when the robot leaves it, or when the simulation ends). Writes grid_pose.csv
 (t, x, y, heading, i, j) in this folder.
 Node (i, j), i east and j north, is at ((i - 2) G, (j - 2) G), as in worlds/make_grid_5x5.py.
+GRID_START="i j H" (set by controllers/fsm/cli_webots.py): first puts the robot on node (i, j) facing H (E, N, W, S).
 """
 import csv
 import math
@@ -18,7 +19,14 @@ PRINT_EVERY = 1.0            # s
 sup = Supervisor()
 dt = int(sup.getBasicTimeStep())
 robot = sup.getFromDef("ST5")
-path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "grid_pose.csv")
+if os.environ.get("GRID_START"):
+    i0, j0, h0 = os.environ["GRID_START"].split()
+    z = robot.getField("translation").getSFVec3f()[2]
+    robot.getField("translation").setSFVec3f([(int(i0) - (N - 1) / 2) * G, (int(j0) - (N - 1) / 2) * G, z])
+    robot.getField("rotation").setSFRotation([0, 0, 1, "ENWS".index(h0.upper()) * math.pi / 2])
+    robot.resetPhysics()
+    print(f"[POSE] start: robot put on node ({i0}, {j0}) facing {h0.upper()}")
+path =os.path.join(os.path.dirname(os.path.abspath(__file__)), "grid_pose.csv")
 with open(path, "w", newline="", buffering=1) as f:
     log = csv.writer(f)
     log.writerow(["t", "x", "y", "heading_deg", "i", "j"])

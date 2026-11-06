@@ -1,4 +1,5 @@
 """Navigators: where to go at a node and what to do when blocked."""
+import math
 import os
 import sys
 
@@ -12,6 +13,7 @@ SIDE = {"S": "STRAIGHT", "L": "LEFT", "R": "RIGHT"}
 STEP = [(1, 0), (0, 1), (-1, 0), (0, -1)]          # E, N, W, S
 ORDER = ["STRAIGHT", "LEFT", "U_TURN", "RIGHT"]    # by (d - h) % 4
 EXIT = {0: "S", 1: "L", 3: "R"}
+SEEN_MARGIN = 0.15                                 # m: an echo this close to a node is not put on an edge
 
 
 class Navigator:  # every method answers (order, reason)
@@ -24,8 +26,14 @@ class Navigator:  # every method answers (order, reason)
     def on_fault(self, kind):    # GO_ON or STOP
         return "GO_ON", kind
 
+    def on_exit_blocked(self, exits):   # sonar: the exit just chosen is blocked. GO_ON (turn anyway) or a new order
+        return "GO_ON", "exit blocked: not handled"
+
     def on_clear(self):
         pass
+
+    def on_seen(self, s, d):     # sonar echo d m ahead while following the line: None, or what was done about it
+        return None
 
     def prior(self):             # (s_next, exits) or None
         return None
@@ -55,7 +63,9 @@ class OrderList(Navigator):
 
 
 class Mission(Navigator):  # goal on the grid, path recomputed at every node
-    def __init__(self, start, heading, goal, n=5, g=0.50):
+    def __init__(self, start, heading, goal, n=5, g=0.50, t_block=math.inf):
+        """t_block: seconds an edge found blocked stays out of the plans (the obstacle may go away)."""
+        self.t_block = t_block
         self.map, self.n, self.g = grid(n, g), n, g
         self.to, self.h, self.goal = tuple(start), "ENWS".index(heading), tuple(goal)
         self.node = None
@@ -79,31 +89,59 @@ class Mission(Navigator):  # goal on the grid, path recomputed at every node
         if node == self.goal:
             self.path = [node]
             return "STOP", f"arrived at {node}"
+        cleared = False
         while True:
             path, _ = dijkstra(self.map, self._id(node), self._id(self.goal))
             if not path:
-                return "STOP", f"no path from {node}"
+                if cleared or not self.map.has_blocked():
+                    return "STOP", f"no path from {node}"
+                self.map.blocked_until.clear()     # boxed in: forget every obstacle and try the best way again
+                self.closed, cleared = [], True     # (once: the exits not seen below are dropped again)
+                continue
             (x0, y0), (x1, y1) = self.map.pos[path[0]], self.map.pos[path[1]]
             d = STEP.index((x1 - x0, y1 - y0))
             rel = (d - h_in) % 4
             if exits is None or rel == 2 or EXIT[rel] in exits:
                 break
-            self.map.block_edge(path[0], path[1])   # exit not there: drop the edge
-            self.closed.append((node, self._step(node, d)))
+            self._block(node, self._step(node, d))   # exit not there: drop the edge
         self.h, self.to = d, self._step(node, d)
         self.path = [(c, self.n - 1 - r) for r, c in path]
-        return ORDER[rel], f"mission: at {node}, next {self.to}"
+        return ORDER[rel], f"mission: at {node}, next {self.to}" + (" (boxed in: obstacles forgotten)" if cleared else "")
+
+    def on_seen(self, s, d):
+        """Sonar echo d m ahead (robot at s) while driving to self.to, the plan going on straight after it: an obstacle
+        on that next edge is dropped now, so the plan at self.to goes around it (no stop, wait and U-turn there)."""
+        if len(self.path) < 3 or self.path[1] != self.to or self._step(self.to, self.h) != self.path[2]:
+            return None                    # no plan beyond self.to, or it turns there: the sonar looks elsewhere
+        if not self.s_next + SEEN_MARGIN < s + d < self.s_next + self.g - SEEN_MARGIN:
+            return None                    # not on that edge (near a node it is ambiguous: the stop handles it)
+        edge = (self.to, self.path[2])
+        self._block(*edge)
+        self.path = self.path[:2]
+        return f"obstacle {d:.2f} m ahead, on {edge[0]}-{edge[1]}: left out of the plan before getting there"
+
+    def _block(self, a, b):
+        """Drop the edge a-b (grid nodes) from the plans for t_block seconds."""
+        self.map.block_edge(self._id(a), self._id(b), self.t_block)
+        self.closed.append((a, b))
 
     def on_blocked(self, s, d):  # drop the edge of the obstacle, back to the node behind
+        if self.to == self.node:    # blocked again on the way back to it: boxed in on one edge, wait for a way out
+            return "WAIT", f"blocked again before reaching {self.node}: waiting"
         prev, passed = self._step(self.node, (self.h_in + 2) % 4), s >= self.s_at
         edge = (self.node, self.to) if s + d > self.s_at else (prev, self.node)
-        self.map.block_edge(self._id(edge[0]), self._id(edge[1]))
-        self.closed.append(edge)
+        self._block(*edge)
         self.path = []
         back, s_back = (self.node, self.s_at) if passed else (prev, self.s_at - self.g)
         self.to, self.h = back, ((self.h if passed else self.h_in) + 2) % 4
         self.s_next = 2 * s - s_back            # the node behind is s - s_back away
         return "U_TURN", f"edge {edge[0]}-{edge[1]} blocked: back to {back}"
+
+    def on_exit_blocked(self, exits):   # sonar at the node centre: drop the exit just chosen, choose again from here
+        edge = (self.node, self.to)
+        self._block(*edge)
+        self.to, self.h = self.node, self.h_in
+        return self.on_node(exits, self.s_at)
 
     def on_fault(self, kind):    # node missed: counted as passed
         if kind != "node missed":

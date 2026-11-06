@@ -117,7 +117,13 @@ cd <repo>/Webots/Simulation_Webots/Simulation_Webots/controllers/fsm
 "$WEBOTS_HOME/webots-controller" --robot-name=Cherokey_4W_v3 cli_webots.py --lp
 ```
 
-3. Quando aparecer `connected to Webots`, digite um destino `x y` (de 0 a 4) e Enter, por exemplo `4 3`.
+3. Ele pergunta onde o robô começa:
+   - `Start node x y`: o nó, por exemplo `2 1`;
+   - `Heading`: para onde ele olha, `E`, `N`, `W` ou `S`.
+
+   Enter mantém (0, 0) olhando para o leste, que é onde o mundo coloca o robô. O `grid_pose` leva o robô até
+   esse nó, nessa direção, assim que a simulação começa.
+4. Quando aparecer `connected to Webots`, digite um destino `x y` (de 0 a 4) e Enter, por exemplo `4 3`.
    Na chegada ele pede o próximo destino, a partir de onde parou.
    - `q` + Enter encerra e mostra o resumo das entregas.
    - Com `--lp`, um painel mostra a rota, os obstáculos encontrados (✗) e o carro enquanto ele anda.
@@ -127,13 +133,17 @@ cd <repo>/Webots/Simulation_Webots/Simulation_Webots/controllers/fsm
 O `cli_webots.py` também inicia o segundo controlador do mundo, o `grid_pose`, que dá a posição real do robô.
 Sem ele, o Webots não avança a simulação.
 
-Se o `WEBOTS_HOME` estiver errado, ele avisa `webots-controller not found: start grid_pose yourself`.
-Nesse caso, inicie o `grid_pose` em outro terminal, na mesma pasta e com o mesmo `WEBOTS_HOME`, trocando o
-final do comando por:
+Se o `WEBOTS_HOME` estiver errado, ele avisa `webots-controller not found: start grid_pose yourself, with
+GRID_START="..."`. Nesse caso, inicie o `grid_pose` em outro terminal, na mesma pasta e com o mesmo
+`WEBOTS_HOME`. Defina antes o `GRID_START` que a mensagem mostrou, por exemplo `"2 1 N"`:
+`$env:GRID_START = "2 1 N"` no PowerShell, ou `export GRID_START="2 1 N"` no macOS e no Linux. Depois
+troque o final do comando por:
 
 ```
 --robot-name=grid_pose ../grid_pose/grid_pose.py
 ```
+
+Sem o `GRID_START`, o robô fica onde o mundo o colocou, em (0, 0) olhando para o leste.
 
 Antes de cada nova rodada: **⟲ (reset)** no Webots, **▶**, e o comando de novo.
 
@@ -159,7 +169,7 @@ em `offline/results/` (não versionado).
 | PowerShell: `Token '...' inesperado` ou `O operador '--' funciona apenas em variáveis` | Falta o `&` antes do caminho entre aspas |
 | Parado em `connecting to Webots ...` | Abra um mundo `*_extern.wbt`, aperte ⟲ e depois ▶ |
 | `ModuleNotFoundError: No module named 'numpy'` (ou `'rich'`) | Instale o pacote no Python que o Webots usa (seção 0) |
-| `pose lost at (x, y): saw [...], map has [...]` | O robô não estava onde a missão esperava (por exemplo, errou uma virada). Dê ⟲ antes de cada rodada: o robô começa no nó (0, 0) olhando para o leste |
+| `pose lost at (x, y): saw [...], map has [...]` | O robô não estava onde a missão esperava (por exemplo, errou uma virada, ou a posição inicial informada não era a dele). Dê ⟲ antes de cada rodada e confira o nó e a direção que você informou ao abrir a CLI |
 | `Texture image size ... is not a power of two` | Só um aviso do Webots, pode ignorar |
 
 ## Onde está cada coisa
