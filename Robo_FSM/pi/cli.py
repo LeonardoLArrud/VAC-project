@@ -206,6 +206,7 @@ class DeliveryCli:
         self.pending = queue.Queue()    # commands for the robot loop
         self.quit = False
         self.deliveries = []            # (goal, result, seconds)
+        self.lost = False               # the last delivery stopped short: where the robot is must be typed first
         self.ask, self.say = ask, say
         self.live = LivePreview(n) if live else None     # --lp
         self.on_block = on_block        # --fake: "block x1 y1 x2 y2" puts a hidden obstacle on that edge
@@ -232,6 +233,9 @@ class DeliveryCli:
         if self.goal is not None:
             self.say(f"[yellow]driving to {self.goal}: wait until it arrives, or q to stop[/]")
             return True
+        if self.lost:
+            self.relocate(text)
+            return True
         goal = parse_node(text, self.n)
         if goal is None:
             self.say(f"[red]'{text}' is not a node: type x y, each between 0 and {self.n - 1}[/]")
@@ -247,6 +251,21 @@ class DeliveryCli:
                                expand=False))
             self.pending.put(("MISSION", self.node, self.heading, goal, self.n, self.g))
         return True
+
+    def relocate(self, text):
+        """After a delivery that stopped short: where the robot really is, before the next destination.
+        'x y heading' sets it; Enter keeps the last node the Mission was sure of."""
+        if text:
+            m = re.fullmatch(r"(.*?)[\s,]*([enws])", text)
+            node = parse_node(m.group(1), self.n) if m else None
+            if node is None:
+                self.say(f"[red]type x y heading, e.g. 1 1 s (Enter keeps {self.node} {self.heading})[/]")
+                return
+            self.node, self.heading = node, m.group(2).upper()
+        self.lost = False
+        self.say(Panel(grid_view(self.n, self.node, self.heading), title=f"[{CAR}]robot at {self.node}, facing "
+                       f"{self.heading}[/]", expand=False))
+        self.say(self.next_prompt())
 
     def block(self, text):
         """--fake: 'block x1 y1 x2 y2' -> a hidden obstacle on the edge between two neighbor nodes."""
@@ -274,6 +293,9 @@ class DeliveryCli:
                 wait_for_q(self)        # driving: only q, no Enter
 
     def next_prompt(self):
+        if self.lost:
+            return (f"[bold yellow]Where is the robot now? x y heading, e.g. 1 1 S (Enter: {self.node} "
+                    f"{self.heading}, the last node it was sure of)[/]")
         extra = ", block x1 y1 x2 y2: fake obstacle" if self.on_block else ""
         stop = "" if not self.live else " (while driving: q alone stops)"
         return f"[bold cyan]Next destination: x y (0..{self.n - 1}), q to quit{extra}{stop}[/]"
@@ -305,6 +327,7 @@ class DeliveryCli:
         nav = fsm.nav
         self.node, self.heading = tuple(nav.node), HEADINGS[nav.h_in]   # where it stopped, facing
         arrived = self.node == self.goal
+        self.lost = not arrived         # the next line typed is where it is (Enter: here)
         result = "arrived" if arrived else fsm.reason
         self.deliveries.append((self.goal, result, time.monotonic() - self.t_goal))
         style, title = ("green", f"arrived at {self.node}") if arrived else ("red", f"stopped at {self.node}")

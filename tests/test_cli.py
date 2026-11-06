@@ -72,6 +72,35 @@ class TestDeliveries(unittest.TestCase):
         self.assertEqual((cli.node, cli.heading), ((1, 0), "N"))
         self.assertEqual(cli.deliveries[0][1], fsm.reason)
 
+    def test_after_a_stop_short_the_real_position_comes_first(self):
+        cli, said = quiet_cli()
+        fsm = SimpleNamespace(state="IDLE", nav=None, reason="")
+        cli.attach(fsm)
+        cli.handle("0 4")
+        cli.command()
+        fsm.nav = SimpleNamespace(node=(1, 2), h_in=2)  # pose lost: the last node it was sure of, facing W
+        fsm.reason = "STOP at the node: pose lost at (0, 2)"
+        cli.command()
+        self.assertIn("Where is the robot now?", said[-1])
+        cli.handle("4 4")  # a destination is not a position: asked again, nothing sent
+        self.assertIsNone(cli.command())
+        cli.handle("1 1 s")  # it really is at (1, 1) facing S
+        cli.handle("4 4")
+        self.assertEqual(cli.command(), ("MISSION", (1, 1), "S", (4, 4), 5, 1.0))
+
+    def test_enter_keeps_the_last_sure_node(self):
+        cli, _ = quiet_cli()
+        fsm = SimpleNamespace(state="IDLE", nav=None, reason="")
+        cli.attach(fsm)
+        cli.handle("4 4")
+        cli.command()
+        fsm.nav = SimpleNamespace(node=(1, 0), h_in=1)
+        fsm.reason = "STOP at the node: no path from (1, 0)"
+        cli.command()
+        cli.handle("")
+        cli.handle("2 2")
+        self.assertEqual(cli.command(), ("MISSION", (1, 0), "N", (2, 2), 5, 1.0))
+
     def test_no_new_destination_while_driving(self):
         cli, said = quiet_cli()
         cli.handle("2 0")
