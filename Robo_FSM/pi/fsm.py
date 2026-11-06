@@ -330,6 +330,12 @@ class LoopTimer:
                   f"(jerks). The serial link may need a core of its own")
 
 
+def check_sonar(fsm, hw):
+    """Sonar without signal: stop with that reason, instead of taking it for an obstacle at 0 m (U-turns forever)."""
+    if fsm.state != IDLE and hasattr(hw, "sonar_ok") and not hw.sonar_ok():
+        fsm.go(IDLE, "sonar: no signal (cable unplugged?)")
+
+
 def look_for_node(detector, fsm, image, s):
     """detector.step(), except while the robot spins in place (the node being confirmed is dropped then);
     a node is announced only in FOLLOW."""
@@ -376,6 +382,7 @@ def main(hw, nav=Explorer):
                     print(f"[NODE] t={t:6.2f}s s={s:.3f} d={node[0]:.3f} exits={sorted(node[1])}")
                 timer.lap("nodes")
                 fsm.follower.points = []
+                check_sonar(fsm, hw)
                 v, w = fsm.step(t, image, hw.obstacle_distance(), hw.heading(), cmd, s, node)
                 timer.lap("fsm")
                 hw.set_wheels(v - K * w, v + K * w)   # the sonar servo stays straight ahead

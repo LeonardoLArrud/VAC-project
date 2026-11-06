@@ -15,6 +15,9 @@ load("robot_hardware", globals())
 D_RATE = 50         # D, lines per second the Arduino sends: robo_fsm.ino PERIOD_D_MS = 20
 
 
+SONAR_LOST_S = 0.5      # the Arduino reports no sonar signal (cm = -2) this long: sonar_ok() is False
+
+
 def sonar_degrees(angle):
     """Servo offset from straight ahead (deg, integer) for a sonar angle (rad, + = left), clipped to SONAR_MAX."""
     return round(SONAR_SIGN * math.degrees(max(-SONAR_MAX, min(SONAR_MAX, angle))))
@@ -30,6 +33,7 @@ class RobotHardware:
         self.counts = self.counts0 = None
         self.pwm = None                    # PWM the Arduino applies to each wheel (FR, FL, RR, RL), from the D lines
         self.alive = False                 # a D, line arrived: the Arduino is up
+        self.t_echo = time.monotonic()     # last D line with a sonar signal (cm != -2)
         self.n_d = 0                       # D, lines read so far (D_RATE per second when the serial keeps up)
         self.cam = self._open_camera()
         self.stream = None
@@ -101,6 +105,8 @@ class RobotHardware:
                 except ValueError:
                     continue
                 cm, self.alive = values[0], True
+                if cm != -2:
+                    self.t_echo = time.monotonic()
                 self.n_d += 1
                 self.dist = cm / 100.0 if cm >= 0 else (float("inf") if cm == -1 else 0.0)
                 if len(values) >= 5:
@@ -108,6 +114,10 @@ class RobotHardware:
                     self.counts0 = self.counts0 or self.counts
                 if len(values) == 9:       # + the PWM of each wheel
                     self.pwm = values[5:]
+
+    def sonar_ok(self):
+        """False when the sonar has sent no signal for SONAR_LOST_S (unplugged?): its reading is then 0 m."""
+        return time.monotonic() - self.t_echo < SONAR_LOST_S
 
     def set_turn_pwm(self, pwm):
         """PWM ceiling of each wheel while spinning in place (robo_fsm.ino T command; an older one ignores it)."""

@@ -178,3 +178,35 @@ class TestGridSearchAndObstacle(unittest.TestCase):
         f.d = float("inf")
         f.wait(None, None)
         self.assertEqual(f.state, FOLLOW)
+
+
+class TestSonarLost(unittest.TestCase):
+    """No sonar signal (cable unplugged): stop with that reason, not U-turns at an 'obstacle at 0 m'."""
+
+    def test_no_signal_stops(self):
+        f = FSM(FakeFollower())
+        f.go(FOLLOW, "START command")
+        fsm.check_sonar(f, SimpleNamespace(sonar_ok=lambda: False))
+        self.assertEqual(f.state, fsm.IDLE)
+        self.assertIn("sonar: no signal", f.reason)
+
+    def test_signal_or_no_sonar_check_goes_on(self):
+        f = FSM(FakeFollower())
+        f.go(FOLLOW, "START command")
+        fsm.check_sonar(f, SimpleNamespace(sonar_ok=lambda: True))
+        fsm.check_sonar(f, SimpleNamespace())          # Webots: no sonar_ok
+        self.assertEqual(f.state, FOLLOW)
+
+    def test_hardware_sees_the_no_signal_lines(self):
+        sys.modules.setdefault("libcamera", SimpleNamespace(Transform=None))
+        import robot_hardware as rh
+        hw = rh.RobotHardware.__new__(rh.RobotHardware)
+        hw.buf, hw.n_d, hw.counts, hw.counts0, hw.pwm, hw.alive = b"", 0, None, None, None, False
+        hw.t_echo = rh.time.monotonic() - 2 * rh.SONAR_LOST_S
+        hw.ser = SimpleNamespace(in_waiting=0)
+        hw.buf = b"D,-2,1,2,3,4\n"
+        hw._read_serial()
+        self.assertFalse(hw.sonar_ok())
+        hw.buf = b"D,35,1,2,3,4\n"
+        hw._read_serial()
+        self.assertTrue(hw.sonar_ok())
