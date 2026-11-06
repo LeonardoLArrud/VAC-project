@@ -1,196 +1,88 @@
-# Como rodar a simulação no Webots (Windows, macOS e Linux)
+# Simulação no Webots
 
-A simulação usa a mesma FSM do robô real: segue a linha, detecta as interseções, para diante de obstáculos e
-navega na grade 5x5 com Dijkstra (`Robo_FSM/graph/`). Há três formas de rodar:
+O robô segue a linha, detecta as interseções, para diante de obstáculos e navega na grade 5x5 com Dijkstra.
+A navegação (`navigators.py` e `Robo_FSM/graph/`) é a mesma do robô real.
 
-| Modo | Para quê | Precisa de |
-|---|---|---|
-| [1. Pelo Webots](#1-pelo-webots-o-mais-simples) | ver o robô andar, com ou sem missão | Webots + `numpy` |
-| [2. Entregas pelo terminal](#2-entregas-digitadas-no-terminal-cli_webotspy) | digitar destinos enquanto o robô anda | Webots + `numpy` + `rich` |
-| [3. Offline](#3-offline-sem-webots) | rodar os 22 cenários de teste sem abrir o Webots | `numpy` + `opencv-python` (+ `matplotlib`) |
+`SIM` = `Webots/Simulation_Webots/Simulation_Webots`.
 
-Nos caminhos abaixo, `<repo>` é a pasta onde você clonou o projeto e `SIM` é
-`<repo>/Webots/Simulation_Webots/Simulation_Webots`.
+## Instalação
 
-## 0. Instalação (uma vez)
+- **Webots R2025a**: <https://cyberbotics.com>.
+- **Python 3** (testado com o 3.11), com `numpy` e `rich` (e `opencv-python` e `matplotlib` para o teste offline):
 
-### Webots
+  | SO | Comando |
+  |---|---|
+  | Windows | `python -m pip install numpy rich opencv-python matplotlib` |
+  | macOS | `python3 -m pip install numpy rich opencv-python matplotlib` |
+  | Ubuntu/Debian | `sudo apt install python3-numpy python3-rich python3-opencv python3-matplotlib` |
 
-Instale o **Webots R2025a**, a versão dos mundos: <https://cyberbotics.com>.
+- O Webots usa o `python` (Windows) ou o `python3` (macOS e Linux) do PATH. Para usar outro, como o de um `venv`,
+  mude em **Tools → Preferences → General → Python command**.
 
-| SO | Pasta de instalação padrão (`WEBOTS_HOME`) |
-|---|---|
-| Windows | `C:\Program Files\Webots`, ou `%LOCALAPPDATA%\Programs\Webots` se instalou só para o seu usuário |
-| macOS | `/Applications/Webots.app` |
-| Linux (.deb ou .tar.bz2) | `/usr/local/webots` |
+## 1. Só o Webots
 
-### Python e pacotes
+1. *(Opcional)* Para uma missão, edite `SIM/controllers/fsm/fsm.py`:
+   `MISSION = ("MISSION", (0, 0), "E", (4, 3))` (nó inicial, direção, destino).
+   x cresce para a direita, y para cima, e (0, 0) é o canto de baixo à esquerda.
+2. **File → Open World →** `SIM/worlds/grid_5x5.wbt` e **▶**. O robô parte sozinho após 1 s.
 
-Python 3 recente (testado com o 3.11). Instale os pacotes **no mesmo Python que o Webots vai usar**:
+- **Teclas** (com a vista 3D clicada): `G` começa, `S` para, `M` reenvia a missão, `L` tampa a câmera.
+- **Câmera:** <http://localhost:8000/> mostra a câmera, e <http://localhost:8000/mask> o que o seguidor enxerga.
+- **Outros mundos:**
+  - `grid_5x5_box.wbt`: uma caixa entre (2, 3) e (3, 3); com a missão acima, o robô volta e recalcula a rota;
+  - `grid_5x5_reflexos.wbt`: reflexos no chão;
+  - `huit.wbt`: o 8; mude o `controller` do robô para `fsm`, senão roda o controlador antigo.
 
-| SO | Comando |
-|---|---|
-| Windows | `python -m pip install numpy rich opencv-python matplotlib` |
-| macOS | `python3 -m pip install numpy rich opencv-python matplotlib` |
-| Linux (Ubuntu/Debian) | `sudo apt install python3-numpy python3-rich python3-opencv python3-matplotlib` |
+## 2. Entregas digitadas no terminal
 
-Para só ver a simulação (modo 1), basta o `numpy`. O `rich` é para o modo 2, e o `opencv-python` e o
-`matplotlib` são para o modo 3.
+1. Abra `SIM/worlds/grid_5x5_extern.wbt` (ou `grid_5x5_box_extern.wbt`) e aperte **▶**.
+2. Num terminal:
 
-No Ubuntu/Debian recente, o `pip install` fora de um ambiente virtual é bloqueado: use o `apt` acima ou
-um `venv` (`python3 -m venv .venv`, depois `source .venv/bin/activate` e o `pip install`).
+   **Windows (PowerShell)**
+   ```powershell
+   $env:WEBOTS_HOME = "C:\Program Files\Webots"    # ou "$env:LOCALAPPDATA\Programs\Webots"
+   cd <repo>\Webots\Simulation_Webots\Simulation_Webots\controllers\fsm
+   & "$env:WEBOTS_HOME\msys64\mingw64\bin\webots-controller.exe" --robot-name=Cherokey_4W_v3 cli_webots.py --lp
+   ```
 
-### Dizer ao Webots qual Python usar
+   **macOS**
+   ```bash
+   export WEBOTS_HOME=/Applications/Webots.app
+   cd <repo>/Webots/Simulation_Webots/Simulation_Webots/controllers/fsm
+   "$WEBOTS_HOME/Contents/MacOS/webots-controller" --robot-name=Cherokey_4W_v3 cli_webots.py --lp
+   ```
 
-No Webots: **Tools → Preferences → General → Python command**.
+   **Linux**
+   ```bash
+   export WEBOTS_HOME=/usr/local/webots
+   cd <repo>/Webots/Simulation_Webots/Simulation_Webots/controllers/fsm
+   "$WEBOTS_HOME/webots-controller" --robot-name=Cherokey_4W_v3 cli_webots.py --lp
+   ```
+3. Informe o nó inicial e a direção (Enter: `0 0` e `E`), ou passe `--start 2 1 --heading N` no fim do comando.
+4. Digite um destino `x y` (de 0 a 4) e Enter. Durante a viagem, `q` (sem Enter) para o robô. Na chegada,
+   digite o próximo destino, ou `q` + Enter para sair.
 
-- Windows: `python`
-- macOS e Linux: `python3`
-- Com um `venv`, coloque o caminho completo do Python do `venv` (por exemplo
-  `<repo>/.venv/bin/python3`, ou `<repo>\.venv\Scripts\python.exe` no Windows).
+**Voltas no 8:** abra `huit_extern.wbt` e troque `--lp` por `--eight`. Digite o número de voltas (`0` = até `q`).
+No Webots, o cruzamento do 8 não é detectado, então as voltas não são contadas: pare com `q`.
 
-## 1. Pelo Webots (o mais simples)
-
-1. *(Opcional)* Escolha a missão em `SIM/controllers/fsm/fsm.py`, na linha `MISSION = ...`:
-   - `MISSION = None`: segue a linha e vai reto nas interseções.
-   - `MISSION = ("MISSION", (0, 0), "E", (4, 3))`: sai do nó (0, 0) olhando para o leste e vai até o nó (4, 3).
-     x cresce para a direita, y para cima, e (0, 0) é o canto de baixo à esquerda.
-2. No Webots: **File → Open World →** `SIM/worlds/grid_5x5.wbt`.
-3. Aperte **▶**. O robô começa sozinho 1 s depois.
-
-Teclas, com a vista 3D clicada:
-
-| Tecla | Faz |
-|---|---|
-| `G` | começa |
-| `S` ou espaço | para |
-| `M` | manda de novo o `MISSION` do `fsm.py` |
-| `L` | tampa e destampa a câmera |
-
-Enquanto roda:
-
-- o console do Webots mostra cada transição (`[FSM] t= 8.64s FOLLOW -> WAIT ...`) e cada interseção (`[NODE] ...`);
-- <http://localhost:8000/> mostra a câmera e os pontos da linha, e <http://localhost:8000/mask> o que o seguidor enxerga.
-
-Outros mundos da pasta `SIM/worlds/`:
-
-| Mundo | O que tem |
-|---|---|
-| `grid_5x5.wbt` | grade 5x5 limpa, 0,50 m entre os nós |
-| `grid_5x5_box.wbt` | uma caixa entre (2, 3) e (3, 3): com a missão acima, o robô para, volta e recalcula a rota |
-| `grid_5x5_reflexos.wbt` | reflexos brancos no chão, para testar o filtro |
-| `huit.wbt` | a pista em 8. Roda o controlador antigo `basique`; para usar a FSM, mude na árvore da cena: `Cherokey_4W_v3 → controller → "fsm"` |
-
-Antes de cada nova rodada: **⟲ (reset)** e **▶**.
-
-## 2. Entregas digitadas no terminal (`cli_webots.py`)
-
-O robô fica parado e você digita os destinos num terminal. Usa os mundos `*_extern.wbt`, em que o Webots
-espera os controladores conectarem pelo terminal.
-
-1. No Webots, abra `SIM/worlds/grid_5x5_extern.wbt` (ou `grid_5x5_box_extern.wbt`, com a caixa) e aperte **▶**.
-2. Num terminal, rode os comandos do seu sistema:
-
-**Windows (PowerShell)**
-
-```powershell
-$env:WEBOTS_HOME = "C:\Program Files\Webots"      # ou "$env:LOCALAPPDATA\Programs\Webots"
-cd <repo>\Webots\Simulation_Webots\Simulation_Webots\controllers\fsm
-& "$env:WEBOTS_HOME\msys64\mingw64\bin\webots-controller.exe" --robot-name=Cherokey_4W_v3 cli_webots.py --lp
-```
-
-No PowerShell, o `&` antes do caminho entre aspas é obrigatório.
-
-**macOS**
-
-```bash
-export WEBOTS_HOME=/Applications/Webots.app
-cd <repo>/Webots/Simulation_Webots/Simulation_Webots/controllers/fsm
-"$WEBOTS_HOME/Contents/MacOS/webots-controller" --robot-name=Cherokey_4W_v3 cli_webots.py --lp
-```
-
-**Linux**
-
-```bash
-export WEBOTS_HOME=/usr/local/webots
-cd <repo>/Webots/Simulation_Webots/Simulation_Webots/controllers/fsm
-"$WEBOTS_HOME/webots-controller" --robot-name=Cherokey_4W_v3 cli_webots.py --lp
-```
-
-3. Ele pergunta onde o robô começa:
-   - `Start node x y`: o nó, por exemplo `2 1`;
-   - `Heading`: para onde ele olha, `E`, `N`, `W` ou `S`.
-
-   Enter mantém (0, 0) olhando para o leste, que é onde o mundo coloca o robô. Para não perguntar, passe a
-   posição no fim do comando, como no `cli.py` do robô: `cli_webots.py --lp --start 2 1 --heading N`.
-   O `grid_pose` leva o robô até esse nó, nessa direção, assim que a simulação começa.
-4. Quando aparecer `connected to Webots`, digite um destino `x y` (de 0 a 4) e Enter, por exemplo `4 3`.
-   Na chegada ele pede o próximo destino, a partir de onde parou.
-   - `q` + Enter encerra e mostra o resumo das entregas.
-   - Com `--lp`, um painel mostra a rota, os obstáculos encontrados (✗) e o carro enquanto ele anda.
-     Nesse momento, só `q` funciona, sozinho e sem Enter, e para o robô. Sem `--lp`, as mensagens saem em
-     texto corrido.
-
-O `cli_webots.py` também inicia o segundo controlador do mundo, o `grid_pose`, que dá a posição real do robô.
-Sem ele, o Webots não avança a simulação.
-
-Se o `WEBOTS_HOME` estiver errado, ele avisa `webots-controller not found: start grid_pose yourself, with
-GRID_START="..."`. Nesse caso, inicie o `grid_pose` em outro terminal, na mesma pasta e com o mesmo
-`WEBOTS_HOME`. Defina antes o `GRID_START` que a mensagem mostrou, por exemplo `"2 1 N"`:
-`$env:GRID_START = "2 1 N"` no PowerShell, ou `export GRID_START="2 1 N"` no macOS e no Linux. Depois
-troque o final do comando por:
-
-```
---robot-name=grid_pose ../grid_pose/grid_pose.py
-```
-
-Sem o `GRID_START`, o robô fica onde o mundo o colocou, em (0, 0) olhando para o leste.
-
-Antes de cada nova rodada: **⟲ (reset)** no Webots, **▶**, e o comando de novo.
-
-### Voltas no 8 (`--eight`)
-
-1. No Webots, abra `SIM/worlds/huit_extern.wbt` e aperte **▶**.
-2. Rode o mesmo comando do passo 2, trocando `cli_webots.py --lp` por `cli_webots.py --eight`.
-3. Digite um número de voltas e Enter (`0` = até apertar `q`). Enquanto o robô anda, `q` sozinho para.
-
-No Webots, o cruzamento desenhado no `huit.jpg` é fino demais para o detector de interseções, então as voltas
-não são contadas: o robô segue o 8 até você apertar `q`. No robô real, a CLI conta 2 passagens pelo cruzamento
-por volta e para sozinha. No Webots, o V0 e os outros parâmetros não são perguntados: o controlador usa os
-valores dele.
+Antes de cada rodada: **⟲** e **▶**.
 
 ## 3. Offline (sem Webots)
 
-A FSM roda num mundo 2D simulado, com a câmera simulada. Bom para conferir que nada quebrou.
-
 ```bash
 cd <repo>/Webots/Simulation_Webots/Simulation_Webots/controllers/fsm/offline
-python scenarios.py                   # os 22 cenários (vários minutos)
-python scenarios.py mission_blocked   # só um
-python timeline.py ../fsm_log.csv     # linha do tempo de uma rodada do Webots (matplotlib)
+python scenarios.py                   # os 22 cenários, PASS ou FAIL (demora alguns minutos)
+python scenarios.py mission_blocked   # um só
 ```
-
-No macOS e no Linux, use `python3`. Cada cenário imprime `PASS` ou `FAIL`, e os arquivos de cada rodada ficam
-em `offline/results/` (não versionado).
 
 ## Problemas comuns
 
-| Mensagem | O que fazer |
+| Mensagem | Solução |
 |---|---|
-| `Set the path to your webots installation folder in WEBOTS_HOME` | Defina o `WEBOTS_HOME` no terminal (modo 2, passo 2) |
-| PowerShell: `Token '...' inesperado` ou `O operador '--' funciona apenas em variáveis` | Falta o `&` antes do caminho entre aspas |
-| Parado em `connecting to Webots ...` | Abra um mundo `*_extern.wbt`, aperte ⟲ e depois ▶ |
-| `ModuleNotFoundError: No module named 'numpy'` (ou `'rich'`) | Instale o pacote no Python que o Webots usa (seção 0) |
-| `pose lost at (x, y): saw [...], map has [...]` | O robô não estava onde a missão esperava (por exemplo, errou uma virada, ou a posição inicial informada não era a dele). Dê ⟲ antes de cada rodada e confira o nó e a direção que você informou ao abrir a CLI |
-| `Texture image size ... is not a power of two` | Só um aviso do Webots, pode ignorar |
-
-## Onde está cada coisa
-
-| Pasta | O que tem |
-|---|---|
-| `SIM/worlds/` | os mundos; `make_grid_5x5.py` refaz a textura e os mundos da grade |
-| `SIM/protos/` | o robô (`Cherokey_4W_v3`), a câmera e o sonar |
-| `SIM/controllers/fsm/` | a FSM, os ganchos do Webots e o `cli_webots.py` (detalhes no `README.md` dessa pasta) |
-| `SIM/controllers/grid_pose/` | supervisor: a posição real do robô na grade |
-| `SIM/controllers/mission_view/` | supervisor opcional: desenha a missão com esferas (adicione um `Robot` com `supervisor TRUE` e `controller "mission_view"` ao mundo) |
-| `SIM/controllers/basique/` | o primeiro controlador (pista em 8) |
+| `Set the path to your webots installation folder in WEBOTS_HOME` | Defina o `WEBOTS_HOME` (seção 2, passo 2) |
+| `webots-controller not found: start grid_pose yourself` | O `WEBOTS_HOME` aponta para a pasta errada |
+| PowerShell: `O operador '--' funciona apenas em variáveis` | Falta o `&` antes do caminho entre aspas |
+| Parado em `connecting to Webots` | Abra um mundo `*_extern.wbt` e aperte ⟲ e ▶ |
+| `No module named 'numpy'` (ou `'rich'`) | Instale o pacote no Python que o Webots usa |
+| `pose lost at (x, y)` | O robô não estava onde a missão supunha: ⟲, ▶ e confira o nó e a direção informados |
+| `Texture image size ... is not a power of two` | Aviso do Webots, pode ignorar |
