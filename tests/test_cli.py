@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from rich.console import Console  # noqa: E402
 
 from cli import (FakeFsm, DeliveryCli, LivePreview, cli_hardware, grid_view, ini_value,  # noqa: E402
-                 parse_node, run_params, snapshot, with_value)
+                 parse_node, run_params, snapshot, start_args, with_value)
 from navigators import SEEN_MARGIN, Mission  # noqa: E402
 
 
@@ -116,7 +116,7 @@ class TestRunSettings(unittest.TestCase):
     def test_run_params_is_a_copy_and_the_file_is_untouched(self):
         with open(PARAMS_INI) as f:
             before = f.read()
-        run_path = run_params(PARAMS_INI, 0.123)
+        run_path = run_params(PARAMS_INI, {("line_follower", "V0"): 0.123})
         try:
             self.assertEqual(ini_value(run_path, "line_follower", "V0"), 0.123)
             with open(run_path) as f:
@@ -251,17 +251,39 @@ class TestLivePreview(unittest.TestCase):
 
     def test_panel_thread_draws_then_hands_back_the_prompt(self):
         out = io.StringIO()
-        live = LivePreview(5, out=Console(file=out, width=80))
-        nav = Mission((0, 0), "E", (2, 0), 5, 1.0)
-        nav.on_node(None, 0.0)
-        live.start((0, 0), (2, 0))
+        live = LivePreview(out=Console(file=out, width=80))
+        live.start(lambda snap: f"drawn {snap}", "starting...")
         self.assertFalse(live.idle.is_set())                       # panel on: no prompt
-        live.watch(nav)
-        live.watch(nav)                                            # nothing changed: not queued again
-        self.assertLessEqual(live.events.qsize(), 2)
+        live.update("snapshot")
         live.end("arrived")
         self.assertTrue(live.idle.wait(2.0))                       # panel off: prompt again
         self.assertIn("arrived", out.getvalue())
+
+    def test_delivery_redraws_only_when_the_mission_changed(self):
+        sent = []
+        cli = DeliveryCli((0, 0), "E", 5, 1.0, ask=None, say=lambda *a: None, live=True)
+        cli.live.update = sent.append
+        nav = Mission((0, 0), "E", (2, 0), 5, 1.0)
+        nav.on_node(None, 0.0)
+        cli.watch(nav)
+        cli.watch(nav)                                             # nothing changed: no second snapshot
+        nav.on_node(None, 1.0)                                     # at (1, 0)
+        cli.watch(nav)
+        self.assertEqual([snap[0] for snap in sent], [(0, 0), (1, 0)])
+        cli.close()
+
+
+class TestStartArgs(unittest.TestCase):
+    def test_start_and_heading_from_the_command_line(self):
+        self.assertEqual(start_args(["--start", "2", "3", "--heading", "n"], 5), ((2, 3), "N"))
+        self.assertEqual(start_args(["--fake", "--start", "2,3"], 5), ((2, 3), None))
+        self.assertEqual(start_args(["--lp"], 5), (None, None))
+
+    def test_bad_values_stop_with_a_message(self):
+        for argv in (["--start", "7", "1"], ["--start"], ["--heading", "X"]):
+            with self.assertRaises(SystemExit):
+                start_args(argv, 5)
+
 
 
 if __name__ == "__main__":

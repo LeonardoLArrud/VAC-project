@@ -1,0 +1,44 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023b/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023b/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023b/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "../protos/Cherokey_4W_v3.proto"
+EXTERNPROTO "../protos/PiCamera.proto"
+
+WorldInfo {
+}
+Viewpoint {
+  orientation 0.32930308982191364 -0.3387703937259255 -0.8813592317372765 4.677287450883744
+  position -0.3664935793714869 -4.218761265621619 3.0151638204528304
+}
+TexturedBackground {
+}
+TexturedBackgroundLight {
+}
+RectangleArena {
+  translation -0.0622103 -0.325035 -0.05
+  floorSize 3.5 2.5
+  floorTileSize 2.5 2.5
+  floorAppearance Appearance {
+    texture ImageTexture {
+      url [
+        "huit.jpg"
+      ]
+    }
+    textureTransform TextureTransform {
+      scale 0.62 1
+      translation 1.7 1
+    }
+  }
+}
+Cherokey_4W_v3 {
+  translation -0.384254 -0.923184 0.02
+  rotation 0 0 1 1.0472
+  controller "<extern>"
+  camera [
+    PiCamera {
+      rotation 0 1 0 0.5235996938995747
+    }
+  ]
+}
