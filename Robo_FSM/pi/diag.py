@@ -1,5 +1,5 @@
 """Checks on the real robot (Arduino with robo_fsm.ino).
-python3 diag.py [all] | camera | live | wheels | encoders | pi | speed | turn | sonar | odometry | camcal | nodecam | nodestop | nodegap | nodewhy | gridrecord [seconds] | loop [seconds]
+python3 diag.py [all] | camera | live | wheels | encoders | pi | speed | turn | sonar | odometry | camcal | nodecam | nodestop | nodegap | nodewhy | gridrecord [seconds] | loop [seconds] | turnrate [rate ...] [cap=<pwm>]
 python3 diag.py full [first step]: EVERY check below in one guided run, one zip at the end (see full())
 Distance to a node = odometry s + camera d. Calibrate them in this order:
   odometry  follows a straight line for 1 m by the encoders, you measure it: WHEEL_R
@@ -12,10 +12,9 @@ gridrecord: free walk on the grid (random free exit at each node) recording ever
   to tune the detectors offline
 sonar: sweeps the sonar servo right to left, distance at each angle: SONAR_SIGN
 loop: robot still, motors off: ms of each part of the FSM loop and the load of each CPU core (does it fit TIME_STEP?)
+turnrate [rate ...] [cap=<pwm>]: one spin in place per TURN_RATE, PWM of each wheel, did the motor battery cut out?
 """
-import ast
 import builtins
-import configparser
 import csv
 import json
 import math
@@ -36,7 +35,20 @@ import cv2
 import numpy as np
 import serial
 
-from fsm import D_SCAN, D_STOP, FSM, IDLE, MISSION, NODES, STAGES, TIME_STEP, TURN_TOL_Y, LoopTimer, look_for_node
+from fsm import (
+    D_SCAN,
+    D_STOP,
+    FSM,
+    IDLE,
+    MISSION,
+    NODES,
+    STAGES,
+    TIME_STEP,
+    TURN_RATE,
+    TURN_TOL_Y,
+    LoopTimer,
+    look_for_node,
+)
 from line_follower import BANDS, GAIN, H_CAM, K, LOST, THRESHOLD, TILT, V0, X_CAM, LineFollower
 from navigators import SIDE, Explorer, Navigator, OrderList
 from node_detector import ZONE, NodeDetector, NodeProcess
@@ -47,6 +59,7 @@ from robot_hardware import (
     CAM_WIDTH,
     COUNTS_PER_REV,
     PORT,
+    PWM_TURN_MAX,
     USE_ENCODERS,
     V_MAX,
     WHEEL_R,
@@ -202,7 +215,7 @@ def turn():
 
 def sonar():
     """Sonar on its servo, robot still: distance every 10 deg from right to left. A + angle must point to the LEFT
-    of the robot (else SONAR_SIGN = -1). In FOLLOW the servo turns the sonar into the curves.
+    of the robot (else SONAR_SIGN = -1). The FSM keeps the sonar straight ahead: only this sweep turns it.
     Returns [(deg, cm or None)] (None: no echo or no data)."""
     ser = open_serial()
     top = round(math.degrees(SONAR_MAX))
@@ -735,8 +748,7 @@ def record_drive(hw, folder, seconds, fsm, cmd, det, restart=True):
                 if fsm.state == IDLE and fsm.history and not restart:
                     break
                 cmd = "START" if fsm.state == IDLE else None      # never stays stopped: back to following
-                hw.set_wheels(v - K * w, v + K * w)
-                hw.aim_sonar(fsm.aim)            # as fsm.main(): into the curves, ahead in CHECK
+                hw.set_wheels(v - K * w, v + K * w)   # as fsm.main(): the sonar servo stays straight ahead
                 timer.lap("io")
                 hw.show(f.points, f.cached_mask(image))
                 name = rec.image(image)
@@ -788,8 +800,31 @@ def nodestop(hw=None):
     real = ask_number(f"  odometry: robot centre {100 * est:+.1f} cm from the node centre. Measured with a tape "
                       f"(cm, + = past the centre, - = before it): ") / 100
     print(f"  node position error: {100 * (est - real):+.1f} cm (> 0: the robot thinks it is further than it is)")
-    print("  with WHEEL_R calibrated (odometry), this is the camera distance: correct TILT_deg with nodecam")
     return est - real
+
+
+def x_cam_for(errors):
+    """X_CAM that moves the node estimate by the median stop error (> 0 the node was placed too near, < 0 too far):
+    the camera distance d = ground distance + X_CAM, and the odometry stops the robot on s + d."""
+    return X_CAM + float(np.median(errors))
+
+
+def nodestops(hw=None, runs=3):
+    """nodestop `runs` times from different starts; proposes X_CAM from the median error."""
+    hw = hw or RobotHardware(TIME_STEP)
+    errors = []
+    while True:
+        err = nodestop(hw)
+        close_detectors()
+        if err is not None:
+            errors.append(err)
+        print(f"  errors so far (cm): {[round(100 * e, 1) for e in errors]}")
+        if len(errors) >= runs or input("Again from another start? [Y/n] ").strip().lower() not in ("", "y", "yes"):
+            break
+    if errors:
+        print(f"params.ini [line_follower]: X_CAM = {x_cam_for(errors):.3f}   (now {X_CAM}; median error "
+              f"{100 * float(np.median(errors)):+.1f} cm over {len(errors)} stop(s); WHEEL_R calibrated first)")
+    return {"errors_m": errors}
 
 
 def node_detector(f):
@@ -928,10 +963,99 @@ def nodegap(hw=None, nodes=4, v=0.15, max_metres=6.0):
     g = float(np.median(gaps))
     print(f"spacing: median {100 * g:.1f} cm, from {100 * gaps.min():.1f} to {100 * gaps.max():.1f} cm "
           f"({len(gaps)} gap(s))")
-    print(f"MISSION (params.ini / params_entrega.ini): the last number = {g:.2f}   (m between nodes)")
+    print(f"MISSION (params.ini): the last number = {g:.2f}   (m between nodes)")
     if gaps.max() - gaps.min() > 0.10:
         print("  the gaps differ by more than 10 cm: a node was missed or seen twice; look at the list and run again")
     return {"spacing": g, "gaps": [float(x) for x in gaps], "consistent": bool(gaps.max() - gaps.min() <= 0.10)}
+
+
+DEFAULT_TURN_RATES = (1.0, 1.5, 2.0, 2.5)   # rad/s: TURN_RATE candidates, slow to fast
+
+
+def spin_power(hw, rate, turn=2 * math.pi, t_dead=1.0):
+    """One spin in place to the left at `rate` (rad/s), `turn` by the encoders. Returns (turned rad, seconds,
+    PWM samples [(FR, FL, RR, RL)], stopped). stopped: the wheels stood still for t_dead with the spin commanded
+    (the motor battery cut out, or the wheels could not turn)."""
+    h0 = h_moved = hw.heading()
+    t0 = t_moved = time.monotonic()
+    pwm, stopped, n_d, turned = [], False, hw.n_d, 0.0
+    while hw.step():
+        now, h = time.monotonic(), hw.heading()
+        turned = abs(h - h0)
+        if turned >= turn:
+            break
+        if abs(h - h_moved) > 0.02:
+            h_moved, t_moved = h, now
+        elif now - t_moved > t_dead:
+            stopped = True
+            break
+        if hw.n_d != n_d and hw.pwm is not None:   # a new D line: one PWM sample
+            n_d = hw.n_d
+            pwm.append(hw.pwm)
+        hw.set_wheels(-K * rate, K * rate)
+    seconds = time.monotonic() - t0
+    settle(hw)
+    return turned, seconds, pwm, stopped
+
+
+def turnrate(hw=None, rates=None, cap=None):
+    """TURN_RATE and PWM_TURN_MAX: one full spin in place per rate, with the PWM the Arduino applies to each wheel.
+    A spin whose wheels stop while commanded is reported as a battery cut. Wheels sitting at the PWM ceiling cannot reach the rate: the ceiling, not the PI, sets the speed.
+    python3 diag.py turnrate [rate ...] [cap=<pwm>]   e.g. turnrate 1.0 1.5 2.0 cap=180"""
+    args = sys.argv[2:] if hw is None else []
+    rates = rates or [float(a) for a in args if "=" not in a] or list(DEFAULT_TURN_RATES)
+    cap = cap or next((int(a.split("=", 1)[1]) for a in args if a.startswith("cap=")), PWM_TURN_MAX)
+    if not USE_ENCODERS:
+        print("USE_ENCODERS = False: no wheel PI and no heading from the encoders; nothing to measure")
+        return None
+    hw = hw or RobotHardware(TIME_STEP)
+    hw.set_turn_pwm(cap)
+    if hw.pwm is None:
+        print("WARNING: the Arduino does not report the PWM: upload robo_fsm.ino of this code (the ceiling and the "
+              "ramp are in it too). The spins go on, without the PWM columns.")
+    print(f"Spins in place to the LEFT, one full turn per rate: {rates} rad/s, PWM ceiling {cap} "
+          f"(params: TURN_RATE {TURN_RATE}, PWM_TURN_MAX {PWM_TURN_MAX}). Motor battery charged and on.")
+    rows = []
+    for rate in rates:
+        answer = input(f"\nRobot on the track floor (on a node is best), room to spin. "
+                       f"Enter -> {rate} rad/s   s = skip   q = stop: ").strip().lower()
+        if answer == "q":
+            break
+        if answer == "s":
+            continue
+        turned, secs, pwm, stopped = spin_power(hw, rate)
+        p = np.abs(np.array(pwm)) if pwm else None
+        row = {"rate": rate, "got": turned / secs if secs else 0.0, "seconds": secs,
+               "turned_deg": math.degrees(turned), "stopped": stopped,
+               "pwm_max": int(p.max()) if p is not None else None,
+               "pwm_mean": float(p.mean()) if p is not None else None,
+               "at_cap": float((p.max(axis=1) >= cap - 2).mean()) if p is not None else None}
+        pwm_text = (f", PWM max {row['pwm_max']} mean {row['pwm_mean']:.0f}, {100 * row['at_cap']:.0f}% of the "
+                    f"time at the ceiling" if p is not None else "")
+        print(f"  {row['turned_deg']:.0f} deg in {secs:.1f} s: {row['got']:.2f} rad/s on average{pwm_text}")
+        if stopped:
+            print("  the wheels stopped during the spin: did the motor battery cut out? Switch it on again "
+                  "(or free the wheels) before the next one.")
+            row["note"] = input("  What happened? (Enter = the battery cut out): ").strip() or "battery cut out"
+        rows.append(row)
+    if not rows:
+        return None
+    print(f"\nrate  got   time   PWM max  at ceiling  result   (ceiling {cap})")
+    for r in rows:
+        at_cap = f"{100 * r['at_cap']:.0f}%" if r["at_cap"] is not None else "-"
+        print(f"{r['rate']:4.1f}  {r['got']:4.2f}  {r['seconds']:4.1f} s  {r['pwm_max'] or '-':>7}  {at_cap:>10}  "
+              + ("STOPPED: " + r.get("note", "") if r["stopped"] else "ok"))
+    good = [r["rate"] for r in rows if not r["stopped"] and r["got"] >= 0.8 * r["rate"]
+            and (r["at_cap"] is None or r["at_cap"] < 0.2)]
+    if len(rows) < 2:
+        print("one rate only: nothing to compare, TURN_RATE not proposed")
+    elif good:
+        print(f"params.ini [fsm]: TURN_RATE = {max(good)}   (now {TURN_RATE}): the fastest spin that kept the battery "
+              f"on, reached 80% of its rate and stayed off the ceiling"
+              + (f"; [robot_hardware] PWM_TURN_MAX = {cap} (now {PWM_TURN_MAX})" if cap != PWM_TURN_MAX else ""))
+    else:
+        print("no rate passed (battery on, 80% of the rate, off the ceiling): try lower rates or another ceiling")
+    return {"cap": cap, "spins": rows, "best": max(good) if good else None}
 
 
 NAMES = ("FR", "FL", "RR", "RL")
@@ -1030,14 +1154,20 @@ def summary(results):
 # ---------------------------------------------------------------- full: every check in one guided run
 # python3 diag.py full [first step]: guides the steps below in order, records everything in ~/diag_sessions/<date>/
 # (console.txt, images, drive logs, a copy of the code and params, summary.json), writes the params the measures
-# give (params_proposed.ini, params_entrega_proposed.ini, params_changes.txt) and ends with one zip on the Desktop.
+# give (params_proposed.ini, params_changes.txt) and ends with one zip on the Desktop.
 # The guide for the person at the robot: local/testes_robo_pi.html on the Mac.
 
 SESSIONS = os.path.expanduser("~/diag_sessions")     # outside Robo_FSM/: replacing that folder keeps the sessions
 CODE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # Robo_FSM/
 DEFAULT_MISSION = ("MISSION", (0, 0), "E", (4, 3), 5, 0.975)
-ENTREGA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "params_entrega.ini")
 HEADINGS = {"E": "east", "N": "north", "W": "west", "S": "south"}
+
+
+def grid_mission():
+    """Step 15: the long test route of DEFAULT_MISSION (a box on its way: a detour), on the grid of params.ini.
+    Step 16 drives the MISSION of params.ini itself (the delivery)."""
+    n, g = (MISSION or DEFAULT_MISSION)[4:]
+    return DEFAULT_MISSION[:4] + (n, g)
 THROTTLED = {0: "UNDER-VOLTAGE NOW", 1: "CPU frequency capped now", 2: "CPU throttled now", 3: "temperature limit now",
              16: "under-voltage happened since boot", 17: "frequency capping happened since boot",
              18: "throttling happened since boot", 19: "temperature limit happened since boot"}
@@ -1128,15 +1258,6 @@ def pi_state():
         warnings.append("under-voltage: weak battery or power cable; motors, camera and Pi can misbehave. Charge it")
     state["warnings"] = warnings
     return state
-
-
-def ini_value(path, section, key):
-    """One value of an ini file written like params.ini (a Python literal), read without loading the file."""
-    ini = configparser.ConfigParser(inline_comment_prefixes=("#",), interpolation=None)
-    ini.optionxform = str
-    if not ini.read(path):
-        raise FileNotFoundError(f"parameters file not found: {path}")
-    return ast.literal_eval(ini.get(section, key))
 
 
 def spin_crossings(hw, f, direction, rate=0.5, turn=2 * math.pi):
@@ -1358,15 +1479,7 @@ class FullDiag:
         return out
 
     def stops(self):
-        errors = []
-        while True:
-            err = nodestop(self.hardware())
-            close_detectors()
-            if err is not None:
-                errors.append(err)
-            print(f"  errors so far (cm): {[round(100 * e, 1) for e in errors]}")
-            if len(errors) >= 3 or input("Again from another start? [Y/n] ").strip().lower() not in ("", "y", "yes"):
-                return {"errors_m": errors}
+        return nodestops(self.hardware())
 
     def gap(self):
         return nodegap(self.hardware())
@@ -1407,11 +1520,10 @@ class FullDiag:
         return self.drive("drive_grid", 120, Wanderer, "START", nodes=True)
 
     def mission(self):
-        return self.drive("drive_mission", 180, None, MISSION or DEFAULT_MISSION, nodes=True, restart=False)
+        return self.drive("drive_mission", 180, None, grid_mission(), nodes=True, restart=False)
 
     def delivery(self):
-        return self.drive("drive_delivery", 180, None, ini_value(ENTREGA, "fsm", "MISSION"), nodes=True,
-                          restart=False)
+        return self.drive("drive_delivery", 180, None, MISSION or DEFAULT_MISSION, nodes=True, restart=False)
 
     # ---- the session
 
@@ -1504,7 +1616,7 @@ FULL_STEPS = [   # (key, title, what to do, FullDiag method)
     ("mission", "Grid mission (up to 180 s, recorded)",
      ("Robot on the centre of node {start} facing {heading}; goal {goal} ({n}x{n} grid, {g} m between nodes). "
       "Once, put a box on its path a little after a node."), "mission"),
-    ("delivery", "Delivery mission of params_entrega.ini (up to 180 s, recorded)",
+    ("delivery", "Delivery: the MISSION of params.ini (up to 180 s, recorded)",
      ("Robot on the centre of node {d_start} facing {d_heading}; goal {d_goal}. Nothing on the way: this is the run "
       "of the delivery."), "delivery"),
 ]
@@ -1564,6 +1676,10 @@ def proposed_changes(results):
         elif res["true_cm"] is not None and "median_cm" in res and abs(res["median_cm"] - res["true_cm"]) > 3:
             notes.append(f"sonar reads {res['median_cm']:.0f} cm for {res['true_cm']:.0f} cm: D_STOP "
                          f"({100 * D_STOP:.0f} cm) and D_SCAN ({100 * D_SCAN:.0f} cm) are compared with this reading")
+    stops = (results.get("nodestop") or {}).get("errors_m") or []
+    if stops and not (cam and cam["rms_px"] <= 2.0) and abs(float(np.median(stops))) > 0.01:
+        changes.append(("line_follower", "X_CAM", f"{x_cam_for(stops):.3f}",
+                        f"nodestop: median stop error {100 * float(np.median(stops)):+.1f} cm over {len(stops)} stop(s)"))
     shapes = results.get("shapes") or {}
     tilts = [tilt_for(r["measured"], r["bars_d"]) for r in shapes.values()
              if "bars_d" in r and abs(r["bars_d"] - r["measured"]) <= MAX_ERR]
@@ -1585,34 +1701,28 @@ def proposed_changes(results):
 
 
 def write_proposals(results, name):
-    """params_proposed.ini and params_entrega_proposed.ini (the params with the measured values) and
-    params_changes.txt (what changed, from what, why). Nothing in Robo_FSM/ is touched."""
+    """params_proposed.ini (params.ini with the measured values) and params_changes.txt (what changed, from what,
+    why). Nothing in Robo_FSM/ is touched."""
     changes, notes = proposed_changes(results)
     report = [f"Params proposed by diag.py full, session {name}", ""]
-    sources = [("params_proposed.ini", PARAMS_PATH),
-               ("params_entrega_proposed.ini", os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                                            "params_entrega.ini"))]
-    for out_name, src in sources:
-        if not os.path.exists(src) or (out_name != "params_proposed.ini" and os.path.samefile(src, PARAMS_PATH)):
+    with open(PARAMS_PATH) as fh:
+        text = fh.read()
+    report.append(f"params_proposed.ini (from {os.path.basename(PARAMS_PATH)}):")
+    for section, key, value, why in changes:
+        if key == "MISSION spacing":
+            text = set_spacing(text, float(value))
+            report.append(f"  [{section}] MISSION last number -> {value}   ({why})")
             continue
-        with open(src) as fh:
-            text = fh.read()
-        report.append(f"{out_name} (from {os.path.basename(src)}):")
-        for section, key, value, why in changes:
-            if key == "MISSION spacing":
-                text = set_spacing(text, float(value))
-                report.append(f"  [{section}] MISSION last number -> {value}   ({why})")
-                continue
-            text, old = set_value(text, section, key, value)
-            report.append(f"  [{section}] {key}: {old} -> {value}   ({why})" if old is not None else
-                          f"  [{section}] {key}: not in the file, NOT set")
-        if not changes:
-            report.append("  no change: nothing was measured, or every measure agreed with the params")
-        header = (f"# Proposed by diag.py full (session {name}): see params_changes.txt. Check it, then copy it over "
-                  f"pi/{os.path.basename(src)}.\n")
-        with open(out_name, "w") as fh:
-            fh.write(header + text)
-        report.append("")
+        text, old = set_value(text, section, key, value)
+        report.append(f"  [{section}] {key}: {old} -> {value}   ({why})" if old is not None else
+                      f"  [{section}] {key}: not in the file, NOT set")
+    if not changes:
+        report.append("  no change: nothing was measured, or every measure agreed with the params")
+    header = (f"# Proposed by diag.py full (session {name}): see params_changes.txt. Check it, then copy it over "
+              f"pi/{os.path.basename(PARAMS_PATH)}.\n")
+    with open("params_proposed.ini", "w") as fh:
+        fh.write(header + text)
+    report.append("")
     report += ["Notes:"] + [f"  - {n}" for n in notes] if notes else []
     with open("params_changes.txt", "w") as fh:
         fh.write("\n".join(report) + "\n")
@@ -1628,12 +1738,8 @@ def full():
     os.chdir(folder)                   # every file a step writes (diag.png, camcal_*.jpg...) lands in the session
     console = ConsoleCopy("console.txt")
     builtins.input = logged_input(console)
-    start, heading, goal, n, g = (MISSION or DEFAULT_MISSION)[1:]
-    try:
-        d_start, d_heading, d_goal = ini_value(ENTREGA, "fsm", "MISSION")[1:4]
-    except Exception as e:  # noqa: BLE001  the delivery step will report it; the others go on
-        print(f"WARNING: no MISSION in {ENTREGA}: {e}")
-        d_start, d_heading, d_goal = "?", "E", "?"
+    start, heading, goal, n, g = grid_mission()[1:]
+    d_start, d_heading, d_goal = (MISSION or DEFAULT_MISSION)[1:4]
     steps = [(k, t, x.format(start=start, heading=HEADINGS[heading], goal=goal, n=n, g=g, d_start=d_start,
                              d_heading=HEADINGS.get(d_heading, d_heading), d_goal=d_goal), m)
              for k, t, x, m in FULL_STEPS]
@@ -1677,6 +1783,6 @@ def full():
 if __name__ == "__main__":
     modes = {"all": everything, "camera": camera, "live": live, "wheels": wheels, "encoders": encoders, "pi": pi,
              "speed": speed, "turn": turn, "sonar": sonar, "odometry": odometry, "camcal": camcal, "nodecam": nodecam,
-             "nodestop": nodestop, "nodegap": nodegap, "nodewhy": nodewhy, "gridrecord": gridrecord, "loop": loop,
-             "full": full}
+             "nodestop": nodestops, "nodegap": nodegap, "nodewhy": nodewhy, "gridrecord": gridrecord, "loop": loop,
+             "turnrate": turnrate, "full": full}
     modes[sys.argv[1] if len(sys.argv) > 1 else "all"]()

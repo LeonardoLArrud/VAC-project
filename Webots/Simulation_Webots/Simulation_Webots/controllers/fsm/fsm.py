@@ -38,6 +38,8 @@ def main(hw, live_view=False, nav=NAV, detect=None):
         view = LiveView(follower)
     fsm = FSM(follower, Params(), nav=nav, on_change=lambda t, old, new, reason:
               print(f"[FSM] t={t:6.2f}s {old} -> {new} ({reason})"))
+    if hasattr(hw, "attach"):                # e.g. cli_webots.py: watches the FSM to know when a delivery ends
+        hw.attach(fsm)
     path = os.environ.get("FSM_LOG") or os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "fsm_log.csv")
     view_path = os.environ.get("FSM_VIEW") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "mission.json")
