@@ -42,6 +42,7 @@ class FSM:
         self.n_ok, self.saved, self.turn_goal, self.y_prev = 0, FOLLOW, math.pi, None
         self.s_node = self.psi_ref = 0.0
         self.order, self.why, self.node_event, self.exits = "STOP", "", None, None
+        self.kept_node = None               # (s of the node, exits): announced as the robot stopped for an obstacle
         self.check_exit = False             # the turn ends at a node exit (CHECK: the sonar reads it)
         self.ds, self.t_still, self.t_stop, self.fix, self.fixed, self.t_fix_end = 0.0, 0.0, 0.0, 0, False, 0.0   # ALIGN
         self.t_moved = 0.0                  # last time the wheels did what was commanded (stall check)
@@ -52,6 +53,9 @@ class FSM:
         if moved or (abs(self.v) < STALL_V and abs(self.w) < STALL_W):
             self.t_moved = t                # the last command moved the robot, or asked for no motion
         self.t, self.heading, self.s, self.node_event = t, heading, s, node
+        if node is None and self.kept_node and self.state == FOLLOW:   # back from WAIT: the node it had seen
+            s_node, exits = self.kept_node
+            self.node_event, self.kept_node = (s_node - s, exits), None
         self.dists.append(dist)
         self.d = sorted(self.dists)[len(self.dists) // 2]
         if cmd == "STOP" and self.state != IDLE:
@@ -61,6 +65,8 @@ class FSM:
                           "(motor battery switched on late or flat? wheels blocked?)")
         elif self.state in (FOLLOW, NODE) and self.d < D_STOP:
             self.saved = self.state
+            if self.state == FOLLOW and self.node_event:          # kept: WAIT does not look at nodes
+                self.kept_node = (s + self.node_event[0], self.node_event[1])
             self.go(WAIT, f"obstacle at {self.d:.2f} m")
         self.v, self.w = getattr(self, self.state.lower())(image, cmd)
         return self.v, self.w
@@ -69,6 +75,8 @@ class FSM:
         print(f"[FSM] t={self.t:6.2f}s {self.state} -> {new} ({reason})")
         self.history.append((self.t, self.state, new, reason))
         self.state, self.reason = new, reason
+        if new not in (WAIT, FOLLOW):
+            self.kept_node = None
         if new == SEARCH:
             self.aim_search()
         self.t_enter, self.heading0, self.n_ok = self.t, self.heading, 0
