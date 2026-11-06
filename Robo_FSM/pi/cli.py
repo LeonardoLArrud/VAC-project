@@ -122,27 +122,24 @@ def live_panel(n, start, goal, snap):
 
 
 class LivePreview:
-    """--lp: while the robot drives, one panel redrawn in place (path, obstacles, car). The robot loop only
-    queues a snapshot when something changed (microseconds); this thread draws it. Off between deliveries."""
+    """--lp: while the robot drives, one panel redrawn in place. The robot loop only queues a snapshot when
+    something changed (microseconds); this thread draws it with the render function given at start. Off between runs."""
 
-    def __init__(self, n, out=None):
-        self.n, self.console = n, out or console
+    def __init__(self, out=None):
+        self.console = out or console
         self.events = queue.Queue()
         self.idle = threading.Event()   # set: no live panel, the prompt can be used
         self.idle.set()
-        self.key = None
+        self.render = None
         threading.Thread(target=self._run, daemon=True).start()
 
-    def start(self, start, goal):       # keyboard thread: a delivery begins
+    def start(self, render, waiting):   # keyboard thread: a run begins. render(snapshot) -> what to draw
         self.idle.clear()
-        self.key, self.start_node, self.goal = None, start, goal
-        self.events.put(("start", None))
+        self.render = render
+        self.events.put(("start", waiting))
 
-    def watch(self, nav):               # robot loop, every cycle of a delivery: cheap unless it changed
-        key = (nav.node, nav.to, nav.h, len(nav.path), len(nav.closed), len(still_blocked(nav, self.n)))
-        if key != self.key:
-            self.key = key
-            self.events.put(("update", snapshot(nav, self.n)))
+    def update(self, snap):             # robot loop: a new snapshot (only when it changed)
+        self.events.put(("update", snap))
 
     def end(self, *renderables):        # robot loop: the delivery ended; printed once the panel is off
         self.events.put(("end", renderables))
@@ -159,9 +156,9 @@ class LivePreview:
                 live = Live(console=self.console, auto_refresh=False, redirect_stdout=True, redirect_stderr=True,
                             transient=True)   # the panel goes away at the end: the result replaces it
                 live.start()
-                live.update(Text(f"to {self.goal}: starting..."), refresh=True)
+                live.update(Text(data), refresh=True)
             elif kind == "update" and live is not None:
-                live.update(live_panel(self.n, self.start_node, self.goal, data), refresh=True)
+                live.update(self.render(data), refresh=True)
             elif kind == "end":
                 if live is not None:
                     live.stop()
@@ -172,8 +169,8 @@ class LivePreview:
 
 
 def wait_for_q(cli, poll=0.1):
-    """--lp while driving: q alone (no Enter) stops at once. Returns when the delivery has ended, or after q.
-    Other keys are dropped, so they do not end up in the next prompt."""
+    """--lp while driving: q alone (no Enter) stops at once. Returns when the run has ended (cli.busy() False), or
+    after q. Other keys go to cli.key() if it has one (--fake --eight: o = obstacle), else are dropped."""
     if os.name == "nt":
         return _wait_for_q_windows(cli, poll)
     import select
@@ -184,12 +181,14 @@ def wait_for_q(cli, poll=0.1):
     try:
         if old is not None:
             tty.setcbreak(fd)           # one key at a time, no Enter
-        while cli.goal is not None and not cli.quit:
+        while cli.busy() and not cli.quit:
             if select.select([sys.stdin], [], [], poll)[0]:
                 key = sys.stdin.read(1)
                 if key == "" or key.lower() == QUIT:   # "" = end of input (e.g. piped)
                     cli.handle(QUIT)
                     return
+                if hasattr(cli, "key"):
+                    cli.key(key.lower())
     finally:
         if old is not None:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
@@ -198,13 +197,16 @@ def wait_for_q(cli, poll=0.1):
 def _wait_for_q_windows(cli, poll):
     """wait_for_q on Windows, which has no termios: msvcrt reads the console one key at a time."""
     import msvcrt
-    while cli.goal is not None and not cli.quit:
-        if msvcrt.kbhit():
-            if msvcrt.getwch().lower() == QUIT:
-                cli.handle(QUIT)
-                return
-        else:
+    while cli.busy() and not cli.quit:
+        if not msvcrt.kbhit():
             time.sleep(poll)
+            continue
+        key = msvcrt.getwch().lower()
+        if key == QUIT:
+            cli.handle(QUIT)
+            return
+        if hasattr(cli, "key"):
+            cli.key(key)
 
 
 class DeliveryCli:
@@ -221,7 +223,8 @@ class DeliveryCli:
         self.quit = False
         self.deliveries = []            # (goal, result, seconds)
         self.ask, self.say = ask, say
-        self.live = LivePreview(n) if live else None     # --lp
+        self.live = LivePreview() if live else None      # --lp
+        self.live_key = None            # what the live panel last showed: redrawn only when it changes
         self.on_block = on_block        # --fake: "block x1 y1 x2 y2" puts a hidden obstacle on that edge
 
     def attach(self, fsm):
@@ -229,6 +232,9 @@ class DeliveryCli:
 
     def running(self):
         return not self.quit
+
+    def busy(self):                     # a delivery is under way
+        return self.goal is not None
 
     # ------------------------------------------------------------ keyboard side (input thread)
     def handle(self, text):
@@ -254,7 +260,9 @@ class DeliveryCli:
         else:
             self.goal, self.sent, self.t_goal = goal, False, time.monotonic()
             if self.live:
-                self.live.start(self.node, goal)
+                self.live_key = None
+                self.live.start(lambda snap, start=self.node: live_panel(self.n, start, goal, snap),
+                                f"to {goal}: starting...")
             else:
                 self.say(Panel(grid_view(self.n, self.node, self.heading, goal),
                                title=f"[{CAR}]{self.node}[/] → [{GOAL}]{goal}[/]", subtitle="q + Enter: stop",
@@ -284,7 +292,7 @@ class DeliveryCli:
                 text = QUIT
             if not self.handle(text):
                 break
-            if self.live and self.goal is not None:
+            if self.live and self.busy():
                 wait_for_q(self)        # driving: only q, no Enter
 
     def next_prompt(self):
@@ -302,7 +310,7 @@ class DeliveryCli:
         self.check_end()
         fsm = self.fsm
         if self.live and self.sent and fsm is not None and fsm.state != "IDLE" and hasattr(fsm.nav, "path"):
-            self.live.watch(fsm.nav)    # a delivery is running: the live panel follows its Mission
+            self.watch(fsm.nav)         # a delivery is running: the live panel follows its Mission
         try:
             cmd = self.pending.get_nowait()
         except queue.Empty:
@@ -310,6 +318,12 @@ class DeliveryCli:
         if isinstance(cmd, tuple):
             self.sent = True
         return cmd
+
+    def watch(self, nav):               # every cycle of a delivery: a snapshot only when something changed
+        key = (nav.node, nav.to, nav.h, len(nav.path), len(nav.closed), len(still_blocked(nav, self.n)))
+        if key != self.live_key:
+            self.live_key = key
+            self.live.update(snapshot(nav, self.n))
 
     def check_end(self):
         """A MISSION was sent and the FSM is back in IDLE: the robot stopped (at the goal, or not)."""
@@ -447,18 +461,39 @@ def with_value(text, section, key, value):
     return "".join(out)
 
 
-def run_params(path, v0):
-    """A temporary copy of the params file with this run's V0. Returns its path (to delete at the end)."""
+def run_params(path, values):
+    """A temporary copy of the params file with this run's values {(section, key): value}. Returns its path
+    (to delete at the end)."""
     with open(path) as f:
-        text = with_value(f.read(), "line_follower", "V0", v0)
+        text = f.read()
+    for (section, key), value in values.items():
+        text = with_value(text, section, key, value)
     fd, run_path = tempfile.mkstemp(prefix="params_run_", suffix=".ini")
     with os.fdopen(fd, "w") as f:
         f.write(text)
     return run_path
 
 
-def ask_run_settings(path):
-    """V0, start node and heading for this run, the file's values as defaults. Returns (v0, start, heading, n, g)."""
+def start_args(argv, n):
+    """--start x y (or x,y) and --heading E|N|W|S from the command line: (start or None, heading or None)."""
+    start = heading = None
+    if "--start" in argv:
+        i = argv.index("--start")
+        words = argv[i + 1:i + 3]
+        start = parse_node(" ".join(words[:1]), n) or parse_node(" ".join(words), n)
+        if start is None:
+            raise SystemExit(f"--start: give the node as x y (or x,y), each between 0 and {n - 1}")
+    if "--heading" in argv:
+        i = argv.index("--heading")
+        heading = argv[i + 1].upper() if i + 1 < len(argv) else ""
+        if heading not in HEADINGS:
+            raise SystemExit("--heading: one of E, N, W, S")
+    return start, heading
+
+
+def ask_run_settings(path, start_arg=None, heading_arg=None):
+    """V0, start node and heading for this run, the file's values as defaults. Returns (v0, start, heading, n, g).
+    start_arg / heading_arg (--start, --heading) are used as given, without asking."""
     v0, mission = ini_value(path, "line_follower", "V0"), ini_value(path, "fsm", "MISSION")
     if mission:                         # ("MISSION", start, heading, goal, n, g): the goal is not used
         start, heading, n, g = tuple(mission[1]), mission[2], mission[4], mission[5]
@@ -468,7 +503,12 @@ def ask_run_settings(path):
                         "Enter keeps the value in brackets.", title="[bold]settings[/]", border_style="cyan",
                         expand=False))
     new_v0 = ask_speed(v0)
-    start, heading = ask_start(n, start, heading)
+    if start_arg is None:
+        start, heading = ask_start(n, start, heading_arg or heading)
+    else:
+        start, heading = start_arg, heading_arg or heading
+        if heading_arg is None:
+            heading = Prompt.ask("Heading", choices=list(HEADINGS), default=heading)
     console.print(f"V0 [bold]{new_v0}[/] m/s" + (f" (file: {v0})" if new_v0 != v0 else "")
                   + f", start [bold]{start}[/] facing [bold]{heading}[/], {n}x{n} grid, {g} m between nodes")
     return new_v0, start, heading, n, g
@@ -490,11 +530,19 @@ def start_cli(start, heading, n, g, cli=None, live=False, on_block=None):
 
 def main(argv=None):
     """python3 cli.py: the real robot (Pi). python3 cli.py --fake: on a PC, a fake robot (no camera, no serial).
-    --lp (both): live preview, the path, the obstacles found and the car redrawn while the robot drives."""
+    --lp (both): live preview, the path, the obstacles found and the car redrawn while the robot drives.
+    --start x y / --heading N: where the robot is placed (else asked). --eight: laps on the figure 8 (cli_eight.py)."""
     argv = sys.argv[1:] if argv is None else argv
+    if "--eight" in argv:
+        import cli_eight
+        return cli_eight.main(argv)
     live = "--lp" in argv
+    start_arg, heading_arg = start_args(argv, DEFAULT_N)
     if "--fake" in argv:
-        start, heading = ask_start(DEFAULT_N)
+        if start_arg is None:
+            start, heading = ask_start(DEFAULT_N, heading=heading_arg or "E")
+        else:
+            start, heading = start_arg, heading_arg or Prompt.ask("Heading", choices=list(HEADINGS), default="E")
         fake = FakeFsm(quiet=live)      # with the live panel its lines would only push the panel down
         cli = start_cli(start, heading, DEFAULT_N, DEFAULT_G, live=live, on_block=fake.obstacles.add)
         try:
@@ -506,10 +554,10 @@ def main(argv=None):
         return
     import params                       # only its PATH: the robot modules are not loaded yet
 
-    v0, start, heading, n, g = ask_run_settings(params.PATH)
+    v0, start, heading, n, g = ask_run_settings(params.PATH, start_arg, heading_arg)
     # This run's copy of the params, with the new V0. Set before the robot modules load their values; the
     # environment variable also reaches the corner detector's process (a fresh interpreter: "spawn").
-    run_path = run_params(params.PATH, v0)
+    run_path = run_params(params.PATH, {("line_follower", "V0"): v0})
     os.environ["ROBO_PARAMS"] = params.PATH = run_path
     try:
         import fsm                      # robot code (camera, serial): imported here, only on the Pi

@@ -121,8 +121,9 @@ cd <repo>/Webots/Simulation_Webots/Simulation_Webots/controllers/fsm
    - `Start node x y`: o nó, por exemplo `2 1`;
    - `Heading`: para onde ele olha, `E`, `N`, `W` ou `S`.
 
-   Enter mantém (0, 0) olhando para o leste, que é onde o mundo coloca o robô. O `grid_pose` leva o robô até
-   esse nó, nessa direção, assim que a simulação começa.
+   Enter mantém (0, 0) olhando para o leste, que é onde o mundo coloca o robô. Para não perguntar, passe a
+   posição no fim do comando, como no `cli.py` do robô: `cli_webots.py --lp --start 2 1 --heading N`.
+   O `grid_pose` leva o robô até esse nó, nessa direção, assim que a simulação começa.
 4. Quando aparecer `connected to Webots`, digite um destino `x y` (de 0 a 4) e Enter, por exemplo `4 3`.
    Na chegada ele pede o próximo destino, a partir de onde parou.
    - `q` + Enter encerra e mostra o resumo das entregas.
@@ -146,6 +147,17 @@ troque o final do comando por:
 Sem o `GRID_START`, o robô fica onde o mundo o colocou, em (0, 0) olhando para o leste.
 
 Antes de cada nova rodada: **⟲ (reset)** no Webots, **▶**, e o comando de novo.
+
+### Voltas no 8 (`--eight`)
+
+1. No Webots, abra `SIM/worlds/huit_extern.wbt` e aperte **▶**.
+2. Rode o mesmo comando do passo 2, trocando `cli_webots.py --lp` por `cli_webots.py --eight`.
+3. Digite um número de voltas e Enter (`0` = até apertar `q`). Enquanto o robô anda, `q` sozinho para.
+
+No Webots, o cruzamento desenhado no `huit.jpg` é fino demais para o detector de interseções, então as voltas
+não são contadas: o robô segue o 8 até você apertar `q`. No robô real, a CLI conta 2 passagens pelo cruzamento
+por volta e para sozinha. No Webots, o V0 e os outros parâmetros não são perguntados: o controlador usa os
+valores dele.
 
 ## 3. Offline (sem Webots)
 

@@ -10,7 +10,7 @@
 | `webots_hardware.py` | Webots hooks: camera, 4 motors, encoders PS1 to PS4 (`heading()`), `obstacle_distance()` (URM37), `aim_sonar()` (servo), keyboard |
 | `fsm.py` | Main loop: `hw.read()` -> `fsm.step()` -> `hw.wheels()`, writes `fsm_log.csv` |
 | `live_view.py` | The camera and the mask in the browser while the simulation runs |
-| `cli_webots.py` | `Robo_FSM/pi/cli.py` (deliveries typed in a terminal) driving the simulated robot |
+| `cli_webots.py` | `Robo_FSM/pi/cli.py` driving the simulated robot: deliveries on the grid (`--start x y --heading N` or asked), or laps on the 8 (`--eight`, `Robo_FSM/pi/cli_eight.py`) |
 | `offline/` | Simulated hooks (`sim_hardware.py`), 22 scenarios (`scenarios.py`), timeline plot (`timeline.py`) |
 
 The real robot runs the same `navigators.py` and newer versions of the FSM, follower and detector in `Robo_FSM/pi/`
@@ -24,7 +24,7 @@ The real robot runs the same `navigators.py` and newer versions of the FSM, foll
 | `grid_5x5.wbt` | 5x5 grid, 0.50 m between nodes; `fsm` + the `grid_pose` supervisor (true pose) |
 | `grid_5x5_box.wbt` | the same with a box on edge (2, 3)-(3, 3) |
 | `grid_5x5_reflexos.wbt` | the same with floor reflections near the lines |
-| `*_extern.wbt` | the same worlds with both controllers `<extern>`, for `cli_webots.py` |
+| `*_extern.wbt` | the same worlds with the controllers `<extern>`, for `cli_webots.py` (`huit_extern.wbt`: `--eight`) |
 
 `make_grid_5x5.py` rebuilds the grid textures and worlds.
 

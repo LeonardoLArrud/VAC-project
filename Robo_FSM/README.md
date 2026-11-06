@@ -7,7 +7,7 @@ The Arduino only applies the PWM it receives and reports the ultrasound distance
 
 | Folder | What it has |
 |---|---|
-| `pi/` | `fsm.py` (FSM and main loop), `line_follower.py`, `node_detector.py` (bars) and `corner_detector.py` (corners), `navigators.py` (the same file as in the Webots controller), `robot_hardware.py` (Pi Camera + serial), `camera_stream.py` (live view), `cli.py` (deliveries), `diag.py` (checks and calibration), `replay_filters.py` (replays a recording offline), `params.py` + `params.ini` / `params_entrega.ini` |
+| `pi/` | `fsm.py` (FSM and main loop), `line_follower.py`, `node_detector.py` (bars) and `corner_detector.py` (corners), `navigators.py` (the same file as in the Webots controller), `robot_hardware.py` (Pi Camera + serial), `camera_stream.py` (live view), `cli.py` (deliveries) and `cli_eight.py` (laps on the 8), `diag.py` (checks and calibration), `replay_filters.py` (replays a recording offline), `params.py` + `params.ini` / `params_entrega.ini` |
 | `graph/` | the graph logic used by `Mission`: `path.py` (Dijkstra) and `track.py` (grid map). The only copy in the repo: the Webots `navigators.py` loads it from here |
 | `arduino/robo_fsm/` | `robo_fsm.ino` and the course files it uses (`Motor`, `MyServo`, `Parameters.h`) |
 
@@ -52,6 +52,14 @@ If the period shows trouble, give the serial link a core of its own: a separate 
    Dijkstra path, the edges blocked by obstacles (✗) and the car; after an obstacle the new path shows at once.
    While driving only `q` works, alone (no Enter); the prompt comes back at the goal. In `--fake`,
    `block x1 y1 x2 y2` puts a hidden obstacle on an edge, to see the replanning.
+   `--start x y --heading N`: where the robot is placed on the grid, without being asked.
+6. Laps on the 8: `python3 cli.py --eight`. At launch it asks `V0`, `A_LAT`, `D_STOP` and `T_STATIC` for this run
+   only (Enter keeps `params.ini`), then a number of laps (0 = until `q`). The robot follows the line (`Explorer`);
+   the node detector is switched on in this mode only, and the CLI counts the crossing passes (2 per lap), then
+   sends STOP. The live panel draws the 8 with the car placed from the distance driven since the last crossing.
+   Check on the track that the crossing is seen ("crossing passes" goes up): in Webots `huit_extern.wbt` the drawn
+   line is too thin for the detector, so there the laps are not counted (`cli_webots.py --eight`).
+   On a PC: `python3 cli.py --eight --fake` (`o` while driving: fake obstacle).
    Before the Pi, on a PC (a Python with `rich`, plus `numpy` and `opencv` for Webots):
    - `python3 cli.py --fake`: a fake robot (no camera, no serial) moves along the real `Mission` path, 1 s per edge.
    - Webots, real FSM on the 5x5 grid: open `worlds/grid_5x5_extern.wbt`, then from `controllers/fsm/` run
