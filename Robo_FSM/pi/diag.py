@@ -47,6 +47,7 @@ from fsm import (
     TURN_RATE,
     TURN_TOL_Y,
     LoopTimer,
+    check_sonar,
     look_for_node,
 )
 from line_follower import BANDS, GAIN, H_CAM, K, LOST, THRESHOLD, TILT, V0, X_CAM, LineFollower
@@ -742,9 +743,10 @@ def record_drive(hw, folder, seconds, fsm, cmd, det, restart=True):
                     print(f"[NODE] t={t:6.2f}s s={s:.3f} d={node[0]:.3f} exits={sorted(node[1])}")
                 timer.lap("nodes")
                 f.points = []
+                check_sonar(fsm, hw)
                 v, w = fsm.step(t, image, hw.obstacle_distance(), hw.heading(), cmd, s, node)
                 timer.lap("fsm")
-                if fsm.state == IDLE and fsm.history and not restart:
+                if fsm.state == IDLE and fsm.history and (not restart or fsm.reason.startswith("sonar:")):
                     break
                 cmd = "START" if fsm.state == IDLE else None      # never stays stopped: back to following
                 hw.set_wheels(v - K * w, v + K * w)   # as fsm.main(): the sonar servo stays straight ahead
@@ -785,6 +787,7 @@ def nodestop(hw=None):
         node = look_for_node(det, fsm, image, s)
         if node:
             print(f"  node announced {100 * node[0]:.1f} cm ahead, exits {''.join(sorted(node[1]))}")
+        check_sonar(fsm, hw)
         v, w = fsm.step(hw.time(), image, hw.obstacle_distance(), hw.heading(), cmd, s, node)
         cmd = None
         hw.set_wheels(v - K * w, v + K * w)
