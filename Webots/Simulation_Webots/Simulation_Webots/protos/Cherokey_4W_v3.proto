@@ -2,7 +2,7 @@
 
 EXTERNPROTO "../protos/URM37.proto"
 
-# --- PROTO du robot ---
+# --- robot PROTO ---
 PROTO Cherokey_4W_v3 [
   field SFVec3f translation 0 0 0.02
   field SFRotation rotation 0 1 0 0
@@ -19,7 +19,7 @@ PROTO Cherokey_4W_v3 [
 
     children [
 
-      # --- Roue avant gauche ---
+      # --- front left wheel ---
       DEF Wheel1 HingeJoint {
         jointParameters HingeJointParameters {
           axis 0 1 0
@@ -58,12 +58,12 @@ PROTO Cherokey_4W_v3 [
         }
       }
 
-      # --- Caméra (ajoutable ou modifiable) ---
+      # --- camera (can be added or changed) ---
       Group {
         children IS camera
       }
 
-      # --- Roue avant droite ---
+      # --- front right wheel ---
       DEF Wheel2 HingeJoint {
         jointParameters HingeJointParameters {
           axis 0 1 0
@@ -88,7 +88,7 @@ PROTO Cherokey_4W_v3 [
         }
       }
 
-      # --- Roue arrière gauche ---
+      # --- rear left wheel ---
       DEF Wheel3 HingeJoint {
         jointParameters HingeJointParameters {
           axis 0 1 0
@@ -113,7 +113,7 @@ PROTO Cherokey_4W_v3 [
         }
       }
 
-      # --- Roue arrière droite ---
+      # --- rear right wheel ---
       DEF Wheel4 HingeJoint {
         jointParameters HingeJointParameters {
           axis 0 1 0
@@ -138,7 +138,7 @@ PROTO Cherokey_4W_v3 [
         }
       }
 
-      # --- Servo avec capteur personnalisable ---
+      # --- servo carrying a configurable sensor (distanceSensor field, URM37 by default) ---
       HingeJoint {
         jointParameters HingeJointParameters {
           axis 0 0 1
@@ -168,7 +168,7 @@ PROTO Cherokey_4W_v3 [
         }
       }
 
-      # --- Corps du robot ---
+      # --- robot body ---
       Shape {
         appearance PBRAppearance {
           baseColor IS robotColor

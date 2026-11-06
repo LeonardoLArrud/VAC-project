@@ -38,7 +38,7 @@ The real robot runs the same `navigators.py` and newer versions of the FSM, foll
   clearly more or less than half a turn, calibrate `K_WHEELS` (`hardware.py`) and `K` (`line_follower.py`).
 - Every transition is printed: `[FSM] t=  8.64s FOLLOW -> WAIT (obstacle at 0.25 m)`.
 - Deliveries from a terminal: open `grid_5x5_extern.wbt` and run `cli_webots.py`. Step by step for Windows,
-  macOS and Linux (in Portuguese): [`Webots/README.md`](../../../../README.md).
+  macOS and Linux: [`Webots/README.md`](../../../../README.md).
 
 ## Reflection filter and live view
 

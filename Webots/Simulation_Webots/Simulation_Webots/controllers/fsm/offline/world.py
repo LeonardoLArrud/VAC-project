@@ -114,7 +114,7 @@ class World:
         if self._cam is None:
             m = CameraModel(0.132, 0.104, math.radians(30), fov, width, height)
             u, v = np.meshgrid(np.arange(width), np.arange(height))
-            self._cam = m.pixel_para_chao(u, v)
+            self._cam = m.pixel_to_floor(u, v)
         xr, yr = self._cam
         c, s = math.cos(self.psi), math.sin(self.psi)
         xw = self.x + c * xr - s * yr

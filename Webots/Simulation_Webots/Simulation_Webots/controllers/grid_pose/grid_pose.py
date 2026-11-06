@@ -1,6 +1,6 @@
 """Supervisor of grid_5x5.wbt: the true pose of the robot (DEF ST5) on the 5x5 grid.
 
-Checks the FSM's counted pose and node centres against the truth (step 0 of "FSM única e grid 5x5").
+Checks the FSM's counted pose and node centres against the truth (step 0 of "single FSM and 5x5 grid").
 Prints the pose every second and, for each pass within NEAR of a node centre, the closest distance to
 that centre (when the robot leaves it, or when the simulation ends). Writes grid_pose.csv
 (t, x, y, heading, i, j) in this folder.

@@ -1,6 +1,6 @@
 # VAC-project
 
-| Pasta | O que tem |
+| Folder | What it has |
 |---|---|
-| [`Robo_FSM/`](Robo_FSM/README.md) | o robô real: FSM e visão na Raspberry Pi, motores e sonar no Arduino |
-| [`Webots/`](Webots/README.md) | a simulação no Webots, com o passo a passo para Windows, macOS e Linux |
+| [`Robo_FSM/`](Robo_FSM/README.md) | the real robot: FSM and vision on the Raspberry Pi, motors and sonar on the Arduino |
+| [`Webots/`](Webots/README.md) | the Webots simulation, with the step by step for Windows, macOS and Linux |

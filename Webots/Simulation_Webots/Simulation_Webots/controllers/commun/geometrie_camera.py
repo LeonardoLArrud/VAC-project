@@ -1,12 +1,9 @@
-"""Modelo geometrico da camera: pixel <-> ponto no chao (referencial do robo).
+"""Camera geometry model: pixel <-> point on the floor (robot frame). Used by the offline test world
+(fsm/offline/world.py) to render what the camera sees.
 
-Mesmo arquivo na simulacao e no robo real. So os parametros mudam
-(altura, inclinacao, campo de visao, resolucao), lidos de calibracao.
-
-Referencial do robo: x para frente, y para a esquerda, z para cima,
-origem no centro do chassi projetado no chao.
-Imagem: u para a direita, v para baixo, origem no canto superior esquerdo.
-Modelo pinhole sem distorcao (exato no Webots; a verificar na camera real).
+Robot frame: x forward, y left, z up, origin at the chassis centre projected on the floor.
+Image: u right, v down, origin at the top-left corner.
+Pinhole model without distortion (exact in Webots).
 """
 from dataclasses import dataclass
 import math
@@ -16,55 +13,55 @@ import numpy as np
 
 @dataclass(frozen=True)
 class CameraModel:
-    altura_m: float        # altura do centro optico acima do chao
-    x_cam_m: float         # posicao da camera a frente do centro do chassi
-    inclinacao_rad: float  # positivo = olhando para baixo
-    hfov_rad: float        # campo de visao horizontal
-    largura_px: int
-    altura_px: int
+    height_m: float        # height of the optical centre above the floor
+    x_cam_m: float         # camera position ahead of the chassis centre
+    tilt_rad: float        # positive = looking down
+    hfov_rad: float        # horizontal field of view
+    width_px: int
+    height_px: int
 
     @property
     def f_px(self) -> float:
-        return (self.largura_px / 2.0) / math.tan(self.hfov_rad / 2.0)
+        return (self.width_px / 2.0) / math.tan(self.hfov_rad / 2.0)
 
     @property
     def cx(self) -> float:
-        return (self.largura_px - 1) / 2.0
+        return (self.width_px - 1) / 2.0
 
     @property
     def cy(self) -> float:
-        return (self.altura_px - 1) / 2.0
+        return (self.height_px - 1) / 2.0
 
-    def escalar(self, fator: float) -> "CameraModel":
-        """Mesmo modelo para uma imagem reduzida (ex.: processar em 1/4)."""
-        return CameraModel(self.altura_m, self.x_cam_m, self.inclinacao_rad,
-                           self.hfov_rad, round(self.largura_px * fator),
-                           round(self.altura_px * fator))
+    def scaled(self, factor: float) -> "CameraModel":
+        """The same model for a smaller image (e.g. processed at 1/4)."""
+        return CameraModel(self.height_m, self.x_cam_m, self.tilt_rad,
+                           self.hfov_rad, round(self.width_px * factor),
+                           round(self.height_px * factor))
 
-    def pixel_para_chao(self, u, v):
-        """Retorna (x, y) no chao. NaN para pixels acima do horizonte."""
+    def pixel_to_floor(self, u, v):
+        """(x, y) on the floor. NaN for pixels above the horizon."""
         u = np.asarray(u, dtype=float)
         v = np.asarray(v, dtype=float)
-        # direcao do raio: frente, esquerda, cima (antes da inclinacao)
-        frente = np.ones_like(u)
-        esquerda = -(u - self.cx) / self.f_px
-        cima = -(v - self.cy) / self.f_px
-        c, s = math.cos(self.inclinacao_rad), math.sin(self.inclinacao_rad)
-        frente_r = frente * c + cima * s
-        cima_r = -frente * s + cima * c
+        # ray direction: forward, left, up (before the tilt)
+        forward = np.ones_like(u)
+        left = -(u - self.cx) / self.f_px
+        up = -(v - self.cy) / self.f_px
+        c, s = math.cos(self.tilt_rad), math.sin(self.tilt_rad)
+        forward_r = forward * c + up * s
+        up_r = -forward * s + up * c
         with np.errstate(divide="ignore", invalid="ignore"):
-            t = np.where(cima_r < 0, self.altura_m / -cima_r, np.nan)
-        return self.x_cam_m + t * frente_r, t * esquerda
+            t = np.where(up_r < 0, self.height_m / -up_r, np.nan)
+        return self.x_cam_m + t * forward_r, t * left
 
-    def chao_para_pixel(self, x, y):
-        """Inverso de pixel_para_chao (ponto no chao -> pixel)."""
+    def floor_to_pixel(self, x, y):
+        """Inverse of pixel_to_floor (point on the floor -> pixel)."""
         x = np.asarray(x, dtype=float) - self.x_cam_m
         y = np.asarray(y, dtype=float)
-        z = -self.altura_m
-        c, s = math.cos(self.inclinacao_rad), math.sin(self.inclinacao_rad)
-        frente = x * c - z * s
-        cima = x * s + z * c
+        z = -self.height_m
+        c, s = math.cos(self.tilt_rad), math.sin(self.tilt_rad)
+        forward = x * c - z * s
+        up = x * s + z * c
         with np.errstate(divide="ignore", invalid="ignore"):
-            u = self.cx - self.f_px * y / frente
-            v = self.cy - self.f_px * cima / frente
+            u = self.cx - self.f_px * y / forward
+            v = self.cy - self.f_px * up / forward
         return u, v

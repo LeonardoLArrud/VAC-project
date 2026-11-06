@@ -3,7 +3,8 @@
 The Pi runs the FSM (IDLE, FOLLOW, NODE, ALIGN, WAIT, SEARCH, TURN, CHECK) and the pure pursuit follower.
 At each intersection (seen by `node_detector.py`) the navigator decides: `Explorer` (START, e.g. the 8:
 straight on) or `Mission` (`MISSION` in `params.ini`: goal on a grid, Dijkstra from `graph/` at every node).
-The Arduino only applies the PWM it receives and reports the ultrasound distance.
+The Arduino runs the per-wheel speed PI on the encoders and the sonar servo, and reports the ultrasound distance,
+the encoder counts and the PWM of each wheel.
 
 | Folder | What it has |
 |---|---|
@@ -64,24 +65,22 @@ If the period shows trouble, give the serial link a core of its own: a separate 
    Check on the track that the crossing is seen ("crossing passes" goes up): in Webots `huit_extern.wbt` the drawn
    line is too thin for the detector, so there the laps are not counted (`cli_webots.py --eight`).
    On a PC: `python3 cli.py --eight --fake` (`o` while driving: fake obstacle).
-   Before the Pi, on a PC (a Python with `rich`, plus `numpy` and `opencv` for Webots):
+   Before the Pi, on a PC (a Python with `rich`):
    - `python3 cli.py --fake`: a fake robot (no camera, no serial) moves along the real `Mission` path, 1 s per edge.
-   - Webots, real FSM on the 5x5 grid: open `worlds/grid_5x5_extern.wbt`, then from `controllers/fsm/` run
-     `WEBOTS_HOME=/Applications/Webots.app $WEBOTS_HOME/Contents/MacOS/webots-controller --robot-name=Cherokey_4W_v3 cli_webots.py`
-     (macOS; the `python3` first in PATH is the one used). It also starts the world's `grid_pose`
-     supervisor: Webots runs the simulation only once every extern robot is connected. Reset (⟲) and ▶ before each run.
-     Windows and Linux commands: [`Webots/README.md`](../Webots/README.md).
+   - In Webots (the simulation FSM, with the same `navigators.py`): `cli_webots.py`, see
+     [`Webots/README.md`](../Webots/README.md).
 
 ## Before the first test
 
-All the parameters are in `pi/params.ini`, and only there (the .py files declare the names). Values are
+All the Pi parameters are in `pi/params.ini`, and only there (the .py files declare the names); the Arduino ones are
+at the top of `robo_fsm.ino`. Values are
 Python literals, angles with `_deg` are in degrees; a missing or misspelled name stops the program.
 
 - `[robot_hardware]`: `PORT`, `CAM_FOV_deg` (62.2 for camera v2, 53.5 for v1.3), `PWM_MIN`, `V_MAX`;
   `USE_ENCODERS`: True = per-wheel PI and heading from the encoders, False = open-loop PWM.
 - `[line_follower]`: camera geometry `H_CAM`, `X_CAM`, `TILT_deg`; `K` (`python3 diag.py turn`); `V0` (start low,
   e.g. 0.08) and `GAIN`; `THRESHOLD` for the lighting; `OPEN_W`, `OPEN_H` (filter against floor reflections,
-  `FILTER = False` turns it off). Check it on `/mask` of the live view.
+  `FILTER = False` turns it off). Check it on `/mask` of the live view (`LIVE_VIEW = True`).
 - `[fsm]`: `MISSION` (None = the 8: line and obstacles only, nodes and corners are not searched), obstacle
   distances and times, turns. `NODES` (with a MISSION only): who announces intersections: `"bars"`
   (`node_detector.py`), `"corners"` (`corner_detector.py`) or `"both"`.

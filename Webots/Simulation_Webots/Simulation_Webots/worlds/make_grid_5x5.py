@@ -1,4 +1,4 @@
-"""Builds the 5x5 grid world of "FSM única e grid 5x5" (step 0): 5 x 5 nodes 0.50 m apart, 1.9 cm white tape.
+"""Builds the 5x5 grid world of "single FSM and 5x5 grid" (step 0): 5 x 5 nodes 0.50 m apart, 1.9 cm white tape.
 
 Run from this folder:  uv run --with numpy --with pillow make_grid_5x5.py
 Writes the floor textures and, for each world below, <world>.wbt (controllers fsm and grid_pose, launched
@@ -65,7 +65,7 @@ WORLDS = {  # name: (texture, extra nodes)
 }
 
 WORLD = """#VRML_SIM R2025a utf8
-# 5 x 5 grid, 0.50 m between nodes, 1.9 cm tape (step 0 of "FSM única e grid 5x5"). Made by make_grid_5x5.py.
+# 5 x 5 grid, 0.50 m between nodes, 1.9 cm tape (step 0 of "single FSM and 5x5 grid"). Made by make_grid_5x5.py.
 # Node (i, j) is at ((i - 2) * 0.5, (j - 2) * 0.5) m, i east, j north. Robot on node (0, 0) facing east.
 
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023b/projects/objects/backgrounds/protos/TexturedBackground.proto"
