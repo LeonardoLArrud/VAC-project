@@ -174,6 +174,8 @@ class LivePreview:
 def wait_for_q(cli, poll=0.1):
     """--lp while driving: q alone (no Enter) stops at once. Returns when the delivery has ended, or after q.
     Other keys are dropped, so they do not end up in the next prompt."""
+    if os.name == "nt":
+        return _wait_for_q_windows(cli, poll)
     import select
     import termios
     import tty
@@ -191,6 +193,18 @@ def wait_for_q(cli, poll=0.1):
     finally:
         if old is not None:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _wait_for_q_windows(cli, poll):
+    """wait_for_q on Windows, which has no termios: msvcrt reads the console one key at a time."""
+    import msvcrt
+    while cli.goal is not None and not cli.quit:
+        if msvcrt.kbhit():
+            if msvcrt.getwch().lower() == QUIT:
+                cli.handle(QUIT)
+                return
+        else:
+            time.sleep(poll)
 
 
 class DeliveryCli:

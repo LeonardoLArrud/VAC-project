@@ -1,11 +1,12 @@
 """Robo_FSM/pi/cli.py in Webots: test the deliveries on the PC before the Pi, with the real FSM driving the
 simulated robot on the 5x5 grid (line following, nodes, turns, obstacles).
 
+Step by step on Windows, macOS and Linux: Webots/README.md.
 1. Open worlds/grid_5x5_extern.wbt in Webots: robot on node (0, 0) facing east, 0.50 m between nodes.
-2. In a terminal, from this folder (the python3 found first in PATH needs numpy, opencv and rich):
-       export WEBOTS_HOME=/Applications/Webots.app
-       PATH=<the .venv>/bin:$PATH $WEBOTS_HOME/Contents/MacOS/webots-controller \\
-           --robot-name=Cherokey_4W_v3 cli_webots.py
+2. In a terminal, from this folder, with WEBOTS_HOME set (the python found first in PATH needs numpy and rich):
+       <webots-controller> --robot-name=Cherokey_4W_v3 cli_webots.py
+   <webots-controller>: $WEBOTS_HOME/Contents/MacOS/webots-controller (macOS), $WEBOTS_HOME/webots-controller
+   (Linux), %WEBOTS_HOME%\\msys64\\mingw64\\bin\\webots-controller.exe (Windows).
 3. Type destinations in that terminal; q + Enter stops. Add --lp after cli_webots.py for the live preview
    (path, obstacles and car redrawn while it drives; then q alone stops).
 The world has a second extern robot, the grid_pose supervisor, and Webots does not run the simulation until
@@ -36,7 +37,9 @@ def start_grid_pose():
     and this controller waits forever in robot.step(). Started with the same launcher and the same python3."""
     home = os.environ.get("WEBOTS_HOME", "/Applications/Webots.app")
     launcher = next((p for p in (os.path.join(home, "Contents", "MacOS", "webots-controller"),   # macOS
-                                 os.path.join(home, "webots-controller")) if os.path.exists(p)), None)   # Linux
+                                 os.path.join(home, "webots-controller"),                          # Linux
+                                 os.path.join(home, "msys64", "mingw64", "bin", "webots-controller.exe"))  # Windows
+                     if os.path.isfile(p)), None)
     if launcher is None:
         console.print("[yellow]webots-controller not found: start grid_pose yourself[/]")
         return None

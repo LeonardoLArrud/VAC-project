@@ -56,8 +56,9 @@ If the period shows trouble, give the serial link a core of its own: a separate 
    - `python3 cli.py --fake`: a fake robot (no camera, no serial) moves along the real `Mission` path, 1 s per edge.
    - Webots, real FSM on the 5x5 grid: open `worlds/grid_5x5_extern.wbt`, then from `controllers/fsm/` run
      `WEBOTS_HOME=/Applications/Webots.app $WEBOTS_HOME/Contents/MacOS/webots-controller --robot-name=Cherokey_4W_v3 cli_webots.py`
-     (see `cli_webots.py`; the `python3` first in PATH is the one used). It also starts the world's `grid_pose`
+     (macOS; the `python3` first in PATH is the one used). It also starts the world's `grid_pose`
      supervisor: Webots runs the simulation only once every extern robot is connected. Reset (⟲) and ▶ before each run.
+     Windows and Linux commands: [`Webots/README.md`](../Webots/README.md).
 
 ## Before the first test
 
